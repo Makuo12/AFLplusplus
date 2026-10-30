@@ -289,96 +289,67 @@ typedef struct {
 static trap_entry *g_traps;
 static size_t      g_trap_count;
 
-static void remap_page_shared(uintptr_t page_addr, long pg) {
-  int fd = memfd_create("text_shared", 0);
-  if (fd < 0) {
-    log_line("memfd_create failed for %p\n", (void *)page_addr);
-    exit(EXIT_FAILURE);
-  }
-
-  if (ftruncate(fd, pg) != 0) {
-    log_line("ftruncate failed for %p\n", (void *)page_addr);
-    close(fd);
-    exit(EXIT_FAILURE);
-  }
-
-  ssize_t written = write(fd, (void *)page_addr, pg);
-  if (written != pg) {
-    log_line("short write copying page %p (%zd/%ld)\n", (void *)page_addr,
-             written, pg);
-    close(fd);
-    exit(EXIT_FAILURE);
-  }
-
-  void *r = mmap((void *)page_addr, pg, PROT_READ | PROT_WRITE | PROT_EXEC,
-                 MAP_SHARED | MAP_FIXED, fd, 0);
-  close(fd);  // mapping holds its own reference; fd not needed after mmap
-
-  if (r == MAP_FAILED) {
-    log_line("mmap MAP_FIXED failed for %p\n", (void *)page_addr);
-    exit(EXIT_FAILURE);
-  }
-}
-
 static void make_pages_shared(void) {
   long      pg = sysconf(_SC_PAGESIZE);
   uintptr_t pgmask = ~(uintptr_t)(pg - 1);
 
-  // Each trap's full on-disk span: 0xcc + 4 id bytes (category 0),
-  // or 0xcc + 4 marker bytes + 4 id bytes (category 1, loop headers).
-  // Any byte in that span may be overwritten for de-instrumentation,
-  // so every page touched by the span — not just the page containing
-  // the first byte — must be remapped shared.
-  const uintptr_t span0 = 5;  // 1 (0xcc) + 4 (id)
-  const uintptr_t span1 = 9;  // 1 (0xcc) + 4 (marker) + 4 (id)
+  if (!g_trap_count) return;
 
-  // Worst case: every trap touches 2 distinct pages (start + end).
-  uintptr_t *pages = malloc(2 * g_trap_count * sizeof(uintptr_t));
-  if (!pages) {
-    log_line("make_pages_shared: oom\n");
+  // Each trap's full span: 0xcc + 4 id bytes (edge), or for loop headers
+  // the 7-byte cmp/jcc before the trap + 0xcc + 4 marker + 4 id bytes.
+  // Any byte in that span may be rewritten, so every page it touches must
+  // be shared between all forked children.
+  //
+  // All traps live in the target's .text, which is one contiguous mapping.
+  // Remap the whole range [first trap page, last trap page] as ONE shared
+  // mapping instead of one mapping per page: fork() copies every mapping
+  // of the process, so thousands of per-page mappings made every execution
+  // pay milliseconds just to fork.
+  uintptr_t lo = UINTPTR_MAX, hi = 0;
+  for (size_t i = 0; i < g_trap_count; i++) {
+    uintptr_t addr = (uintptr_t)g_traps[i].addr;
+    uintptr_t start = addr - (g_traps[i].is_loop ? 7 : 0);
+    uintptr_t end = addr + (g_traps[i].is_loop ? 9 : 5) - 1;
+    if (start < lo) lo = start;
+    if (end > hi) hi = end;
+  }
+
+  uintptr_t base = lo & pgmask;
+  size_t    len = ((hi & pgmask) + pg) - base;
+
+  int fd = memfd_create("text_shared", 0);
+  if (fd < 0) {
+    log_line("memfd_create failed: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }
 
-  size_t npages = 0;
-  for (size_t i = 0; i < g_trap_count; i++) {
-    // uintptr_t start = (uintptr_t)g_traps[i].addr;
-    uintptr_t addr = (uintptr_t)g_traps[i].addr;
-
-    uintptr_t span = g_traps[i].is_loop ? span1 : span0;
-    // uintptr_t end = start + span - 1; // last byte actually belonging to this
-    // trap
-
-    uintptr_t start = addr - (g_traps[i].is_loop ? 7 : 0);
-    uintptr_t end = addr + span - 1;
-
-    uintptr_t base_start = start & pgmask;
-    uintptr_t base_end = end & pgmask;
-
-    // base_start is always needed; base_end only differs (and is only
-    // needed) if the trap's tail bytes crossed into the next page.
-    uintptr_t candidates[2] = {base_start, base_end};
-    int       ncand = (base_start == base_end) ? 1 : 2;
-
-    for (int c = 0; c < ncand; c++) {
-      uintptr_t base = candidates[c];
-      int       dup = 0;
-      for (size_t j = 0; j < npages; j++) {
-        if (pages[j] == base) {
-          dup = 1;
-          break;
-        }
-      }
-      if (!dup) pages[npages++] = base;
-    }
+  if (ftruncate(fd, len) != 0) {
+    log_line("ftruncate(%zu) failed: %s\n", len, strerror(errno));
+    close(fd);
+    exit(EXIT_FAILURE);
   }
 
-  // log_line("remapping %zu distinct pages (from %zu traps) as MAP_SHARED\n",
-  //          npages, g_trap_count);
+  size_t done = 0;
+  while (done < len) {
+    ssize_t w = write(fd, (void *)(base + done), len - done);
+    if (w <= 0) {
+      log_line("short write copying text %p (%zu/%zu): %s\n", (void *)base,
+               done, len, strerror(errno));
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+    done += (size_t)w;
+  }
 
-  for (size_t i = 0; i < npages; i++)
-    remap_page_shared(pages[i], pg);
+  void *r = mmap((void *)base, len, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_SHARED | MAP_FIXED, fd, 0);
+  close(fd);  // mapping holds its own reference
 
-  free(pages);
+  if (r == MAP_FAILED) {
+    log_line("mmap MAP_FIXED failed for %p (+%zu): %s\n", (void *)base, len,
+             strerror(errno));
+    exit(EXIT_FAILURE);
+  }
 }
 
 static void collect_traps(void) {
