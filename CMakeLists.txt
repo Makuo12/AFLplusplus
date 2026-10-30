@@ -13,8 +13,8 @@ add_definitions(${LLVM_DEFINITIONS})
 
 # GOOD: Use LLVM's dedicated macro for pass plugins instead of add_library(MODULE)
 add_llvm_pass_plugin(Untracer
-    ./src/Pass.cc
-    ./src/RenameMainPass.cpp
+    ./trap_instrumentation/Pass.cc
+    ./trap_instrumentation/RenameMainPass.cpp
 )
 
 set_target_properties(Untracer PROPERTIES
