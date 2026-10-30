@@ -95,7 +95,7 @@ static void sig_log(const char *msg, uintptr_t val) {
 }
 
 static inline void record_hit(int32_t idx, uint32_t val, int is_loop) {
-  if (idx < 0 || idx >= MAP_SIZE) {
+  if (idx < 0 || (uint32_t)idx >= TRAP_VIRGIN_WORDS) {
     sig_log("trap index out of range: ", (uintptr_t)(uint32_t)idx);
     abort();
   }
@@ -221,7 +221,7 @@ static uint32_t *attach_shm(const char *env_name, size_t nwords) {
 }
 
 void setup_shm(void) {
-  virgin_bits = attach_shm(SHM_ID, MAP_SIZE);
+  virgin_bits = attach_shm(SHM_ID, TRAP_VIRGIN_WORDS);
   trace_bits = attach_shm(SHM_ENV_VAR, MAP_SIZE_TRACE);
 }
 
@@ -389,7 +389,8 @@ static void collect_traps(void) {
     exit(EXIT_FAILURE);
   }
 
-  size_t kept = 0;
+  size_t   kept = 0;
+  uint32_t max_id = 0;
   for (size_t i = 0; i < n; i++) {
     void          *addr = __start___traps[i];
     unsigned char *b = (unsigned char *)addr;
@@ -400,11 +401,22 @@ static void collect_traps(void) {
         is_loop ? (b[5] | (b[6] << 8) | (b[7] << 16) | ((uint32_t)b[8] << 24))
                 : (b[1] | (b[2] << 8) | (b[3] << 16) | ((uint32_t)b[4] << 24));
 
+    if (id > max_id) max_id = id;
+
     g_traps[kept++] = (trap_entry){.addr = addr, .id = id, .is_loop = is_loop};
     // log_line("trap[%zu]: addr=%p id=%u loop=%d\n",
     //          i, g_traps[i].addr, g_traps[i].id, g_traps[i].is_loop);
   }
   g_trap_count = kept;
+
+  if (g_trap_count && max_id >= TRAP_VIRGIN_WORDS) {
+    log_line(
+        "highest trap id %u does not fit TRAP_VIRGIN_WORDS (%u): "
+        "raise TRAP_VIRGIN_WORDS in AFL++ config.h, then rebuild "
+        "afl-fuzz and the harness\n",
+        max_id, (unsigned)TRAP_VIRGIN_WORDS);
+    exit(EXIT_FAILURE);
+  }
   // log_line("collected %zu trap sites\n", g_trap_count);
 }
 
