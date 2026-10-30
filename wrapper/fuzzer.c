@@ -221,8 +221,8 @@ static uint32_t *attach_shm(const char *env_name, size_t nwords) {
 }
 
 void setup_shm(void) {
-  virgin_bits = attach_shm(AFL_TRAP_VIRGIN_ENV, AFL_TRAP_VIRGIN_WORDS);
-  trace_bits = attach_shm(SHM_ENV_VAR, AFL_TRAP_TRACE_SIZE);
+  virgin_bits = attach_shm(SHM_ID, MAP_SIZE);
+  trace_bits = attach_shm(SHM_ENV_VAR, MAP_SIZE_TRACE);
 }
 
 static void run_forkserver(char *argv0, char *input) {
