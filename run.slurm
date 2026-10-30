@@ -15,96 +15,90 @@ set -euo pipefail
 
 echo "node=$(hostname -s) cpu=$(lscpu | grep 'Model name' | sed 's/.*: *//')"
 
+# --- AFL++ trap mode -------------------------------------------------------
+export AFL_TRAP_MODE=1                  # REQUIRED: use the trap-based port
+
 export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 export AFL_SKIP_CPUFREQ=1
 export AFL_NO_UI=1
-# export AFL_NO_FORKSRV=1  
 export AFL_NO_AFFINITY=1
 
-export AFL_DISABLE_TRIM=1
-export AFL_FAST_CAL=1                   # fewer calibration runs (3 instead of 4 on stable inputs)
+export AFL_FAST_CAL=1                   # 3 calibration runs (1 warm-up + 2 timed) instead of 7
 export AFL_NO_SYNC=1                    # don't import other instances' inputs
+# Trimming, frameshift, deterministic stages and CmpLog are turned off by
+# AFL_TRAP_MODE automatically; no need to set AFL_DISABLE_TRIM.
 
 FUZZ_SECONDS=$((24*60*60))
-TRACE="main.trace"
 ORACLE="main.oracle"
-PROGRAM="forkserver_afl"
+PROGRAM="forkserver_aflpp"
 
 
 if [[ "${1:-}" = "arc" ]]; then
-module load LLVM/20.1.8-GCCcore-14.3.0
+    module load LLVM/20.1.8-GCCcore-14.3.0
     module load GCCcore/14.3.0
     ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
     FULL_ID="${PROGRAM}_${ID}"
 
-    wrap="$HOME/forkserver/AFL"      # same as build
+    wrap="$HOME/forkserver/AFLplusplus"         # same as build
+    AFLPP="$wrap/src"           # <-- your patched AFL++ directory
     runner="$wrap/forkserver_runner"
     mkdir -p "$runner"
 
-    output="$runner/output_${ID}"                # per-task copy
+    output="$runner/output_${ID}"       # per-task copy
     rm -rf "$output"
     mkdir -p "$output"
-    cp -r "$wrap/output/." "$output/"      # everything: binaries, .bc, .ll, edge, remove_edge, ...
+    cp -r "$wrap/output/." "$output/"   # everything: binaries, .bc, .ll, ...
 
     tmp_base="${TMPDIR:-/tmp}"
-    tmp_input="$tmp_base/forkserver_${FULL_ID}"
-    OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output (wiped at job end)
-    RESULTS_DIR="$output/results"             # persistent results
-    export LOOP_THRESHOLD_FILE="$OUTROOT/loop_threshold.txt"
-    SUT_ORACLE="$output/$ORACLE"
-    SUT_TRACE="$output/$TRACE"
-    SUT_ARGS=(@@ /dev/null)
-    export LOG_FILE="$OUTROOT/fuzzer_log_file"
-    mkdir -p "$tmp_input" "$OUTROOT" "$RESULTS_DIR"
-    cp -rf "$wrap/testcases/pdf/." "$tmp_input/"
-    SEED_DIR="$tmp_input"
-
-    [ -d "$SEED_DIR" ] || { echo "Missing seed dir: $SEED_DIR" >&2; exit 1; }
-    [ -x "$SUT_ORACLE" ] || { echo "Missing oracle: $SUT_ORACLE" >&2; exit 1; }
-    [ -x "$SUT_TRACE" ] || { echo "Missing trace: $SUT_TRACE" >&2; exit 1; }
-
 else
     # run on my local linux machine
     wrap=$(pwd)
+    AFLPP="$wrap/src"           # <-- your patched AFL++ directory
 
     ID="local_$(date +%s)_$$"
-    FULL_ID="${PROGRAM:-forkserver}_${ID}"
+    FULL_ID="${PROGRAM}_${ID}"
 
     output="$wrap/output_$ID"
     mkdir -p "$output"
     cp -r "$wrap/output/." "$output/"
 
     tmp_base="/tmp"
-    tmp_input="$tmp_base/forkserver_${FULL_ID}"
-    OUTROOT="$tmp_base/$FULL_ID"
-    RESULTS_DIR="$output/results"
-
-    SUT_ORACLE="$output/$ORACLE"
-    SUT_TRACE="$output/$TRACE"
-    SUT_ARGS=(@@ /dev/null)
-
-    mkdir -p "$tmp_input" "$OUTROOT" "$RESULTS_DIR"
-    cp -rf "$wrap/testcases/pdf/." "$tmp_input/"
-    SEED_DIR="$tmp_input"
-    export LOOP_THRESHOLD_FILE="./output/loop_threshold.txt"
-
-    [ -d "$SEED_DIR" ] || { echo "Missing seed dir: $SEED_DIR" >&2; exit 1; }
-    [ -x "$SUT_ORACLE" ] || { echo "Missing oracle: $SUT_ORACLE" >&2; exit 1; }
-    [ -x "$SUT_TRACE" ] || { echo "Missing trace: $SUT_TRACE" >&2; exit 1; }
 fi
 
+tmp_input="$tmp_base/forkserver_${FULL_ID}"
+OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output
+RESULTS_DIR="$output/results"           # persistent results
+SUT_ORACLE="$output/$ORACLE"
+SUT_ARGS=(@@)                           # harness reads the input from argv[1]
+
+# Harness log (trap_handler output). Kept outside the AFL++ output dir so
+# AFL++'s own directory handling never touches it.
+export LOG_FILE="$tmp_base/${FULL_ID}_harness.log"
+
+mkdir -p "$tmp_input" "$RESULTS_DIR"
+cp -rf "$wrap/testcases/pdf/." "$tmp_input/"
+SEED_DIR="$tmp_input"
+
+AFL_FUZZ="$AFLPP/afl-fuzz"
+[ -d "$SEED_DIR" ]   || { echo "Missing seed dir: $SEED_DIR" >&2; exit 1; }
+[ -x "$SUT_ORACLE" ] || { echo "Missing oracle: $SUT_ORACLE" >&2; exit 1; }
+[ -x "$AFL_FUZZ" ]   || { echo "Missing afl-fuzz: $AFL_FUZZ" >&2; exit 1; }
+
+# -z : no deterministic stages (in this AFL++ -d is deprecated and ignored)
 rc=0
-if [[ "${1:-}" = "arc" ]]; then
-    timeout -s INT "$FUZZ_SECONDS" ./fuzzer/afl-fuzz -d -i "$SEED_DIR" -o "$OUTROOT" \
+timeout -s INT "$FUZZ_SECONDS" "$AFL_FUZZ" -z -i "$SEED_DIR" -o "$OUTROOT" \
     -t 5000 -m 2048 -- "$SUT_ORACLE" "${SUT_ARGS[@]}" || rc=$?
-else
-    timeout -s INT "$FUZZ_SECONDS" ./fuzzer/afl-fuzz -d -i "$SEED_DIR" -o "$OUTROOT" \
-    -t 5000 -m 2048 -- "$SUT_ORACLE" "${SUT_ARGS[@]}" || rc=$?
-fi
 echo "afl-fuzz exited with code $rc"
 
-if [ -f "$OUTROOT/fuzzer_stats" ]; then
-  cp "$OUTROOT/fuzzer_stats" "$RESULTS_DIR/fuzzer_stats_$FULL_ID"
+# AFL++ writes into a per-instance subfolder: $OUTROOT/default/
+if [ -f "$OUTROOT/default/fuzzer_stats" ]; then
+    cp "$OUTROOT/default/fuzzer_stats" "$RESULTS_DIR/fuzzer_stats_$FULL_ID"
+fi
+if [ -f "$OUTROOT/default/plot_data" ]; then
+    cp "$OUTROOT/default/plot_data" "$RESULTS_DIR/plot_data_$FULL_ID"
+fi
+if [ -f "$LOG_FILE" ]; then
+    cp "$LOG_FILE" "$RESULTS_DIR/harness_log_$FULL_ID"
 fi
 
 # Tar from the parent so the archive contains only "$FULL_ID/..."
