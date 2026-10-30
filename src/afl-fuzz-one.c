@@ -325,6 +325,8 @@ u8 fuzz_one(afl_state_t *afl) {
   u32 i;
   u8 *in_buf, *out_buf, *orig_in, *ex_tmp;
   u64 havoc_queued = 0, orig_hit_cnt, new_hit_cnt = 0, prev_cksum, _prev_cksum;
+  u8  trap_heavy = 0; /* trap mode: heavy entry?    */
+  u32 trap_items_at_start = afl->queued_items;
   u32 splice_cycle = 0, perf_score = 100, orig_perf;
 
   u8  ret_val = 1, doing_det = 0;
@@ -440,6 +442,16 @@ u8 fuzz_one(afl_state_t *afl) {
 
     }
 
+  }
+  /* trap mode: heavy (slow / large) entries that were already fuzzed without
+   finding anything are mostly skipped. */
+  if (unlikely(afl->trap_mode)) {
+    trap_heavy = trap_is_heavy_entry(afl, afl->queue_cur);
+    if (trap_heavy && afl->queue_cur->was_fuzzed &&
+        !afl->queue_cur->trap_productive &&
+        rand_below(afl, 100) < TRAP_HEAVY_REVISIT_PCT) {
+      return 1;
+    }
   }
 
 #endif                                                     /* ^IGNORE_FINDS */
@@ -2229,7 +2241,9 @@ havoc_stage:
   }
 
   if (unlikely(afl->stage_max < HAVOC_MIN)) { afl->stage_max = HAVOC_MIN; }
-
+  if (unlikely(trap_heavy) && afl->stage_max > TRAP_HEAVY_HAVOC_MAX) {
+    afl->stage_max = TRAP_HEAVY_HAVOC_MAX;
+  }
   temp_len = len;
 
   orig_hit_cnt = afl->queued_items + afl->saved_crashes;
@@ -3801,21 +3815,24 @@ havoc_stage:
     }
 
     /* If we're finding new stuff, let's run for a bit longer, limits
-       permitting. */
+           permitting. */
 
     if (afl->queued_items != havoc_queued) {
+      if (unlikely(trap_heavy)) {
+        if (afl->stage_max < TRAP_HEAVY_HAVOC_CEIL) {
+          afl->stage_max *= 2;
+          if (afl->stage_max > TRAP_HEAVY_HAVOC_CEIL) {
+            afl->stage_max = TRAP_HEAVY_HAVOC_CEIL;
+          }
+        }
 
-      if (perf_score <= afl->havoc_max_mult * 100) {
-
+      } else if (perf_score <= afl->havoc_max_mult * 100) {
         afl->stage_max *= 2;
         perf_score *= 2;
-
       }
 
       havoc_queued = afl->queued_items;
-
     }
-
   }
 
   mopt_stage_account(
@@ -3857,9 +3874,10 @@ havoc_stage:
 
 retry_splicing:
 
-  if (!was_doing_ijon && afl->use_splicing && splice_cycle++ < SPLICE_CYCLES &&
-      afl->ready_for_splicing_count > 1 && afl->queue_cur->len >= 4) {
-
+  if (!was_doing_ijon && afl->use_splicing &&
+      (!trap_heavy || afl->queued_items > trap_items_at_start) &&
+      splice_cycle++ < SPLICE_CYCLES && afl->ready_for_splicing_count > 1 &&
+      afl->queue_cur->len >= 4) {
     struct queue_entry *target;
     u32                 tid, split_at;
     u8                 *new_buf;
@@ -3952,7 +3970,6 @@ retry_splicing:
     }
 
     goto custom_mutator_stage;
-
   }
 
 #endif                                                     /* !IGNORE_FINDS */
@@ -3992,6 +4009,9 @@ abandon_entry:
   mopt_round_reset(afl);
 
   afl->splicing_with = -1;
+  if (unlikely(afl->trap_mode && !was_doing_ijon)) {
+    afl->queue_cur->trap_productive = (afl->queued_items > trap_items_at_start);
+  }
 
   /* Update afl->pending_not_fuzzed count if we made it through the calibration
      cycle and have not seen this entry before. */

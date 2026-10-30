@@ -619,6 +619,21 @@ We add 4 byte for one u32 length field. */
 
 #define AFL_QEMU_NOT_ZERO
 
+/* Trap CULL */
+/* Favored-set culling (cull_queue_trap): cutoff = mean + K * sd of
+   W_TIME*ln(exec_us+1) + W_LEN*ln(len+1) [+ ln(NEWCOV_BONUS) if +cov]. */
+#define TRAP_CULL_K (-0.25) /* lower = stricter                 */
+#define TRAP_CULL_W_TIME 1.0
+#define TRAP_CULL_W_LEN 1.0
+#define TRAP_CULL_NEWCOV_BONUS 0.15 /* your "0.15x bonus"               */
+
+/* Heavy entries (slow or large) get a capped havoc budget. */
+#define TRAP_SLOW_MULT 3.0        /* slow  if exec_us > 3x average      */
+#define TRAP_LARGE_MULT 2.0       /* large if len     > 2x average      */
+#define TRAP_HEAVY_HAVOC_MAX 8    /* havoc execs for a heavy entry      */
+#define TRAP_HEAVY_HAVOC_CEIL 64  /* ...growing to this if productive   */
+#define TRAP_HEAVY_REVISIT_PCT 90 /* % skip of heavy unproductive redo  */
+
 /* AFL RedQueen */
 
 #define CMPLOG_SHM_ENV_VAR "__AFL_CMPLOG_SHM_ID"

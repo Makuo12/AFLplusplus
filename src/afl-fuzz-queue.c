@@ -1286,7 +1286,10 @@ static inline void queue_entry_dec_tc_ref(afl_state_t        *afl,
 
 void update_bitmap_score(afl_state_t *afl, struct queue_entry *q,
                          bool have_trace) {
-
+  if (unlikely(afl->trap_mode)) {
+    afl->score_changed = 1;
+    return;
+  }
   u32 i;
   u64 fav_factor;
   u64 fuzz_p2;
@@ -1575,6 +1578,10 @@ static void minimize_queue_disable(afl_state_t *afl) {
    all fuzzing steps. */
 
 inline void cull_queue(afl_state_t *afl) {
+  if (unlikely(afl->trap_mode)) {
+    cull_queue_trap(afl);
+    return;
+  }
 
   if (likely(!afl->score_changed || afl->non_instrumented_mode)) { return; }
 
@@ -1718,6 +1725,7 @@ inline void cull_queue(afl_state_t *afl) {
    go into config.h. */
 
 u32 calculate_score(afl_state_t *afl, struct queue_entry *q) {
+  if (unlikely(afl->trap_mode)) { return calculate_score_trap(afl, q); }
 
   u32 cal_cycles = afl->total_cal_cycles;
   u32 bitmap_entries = afl->total_bitmap_entries;

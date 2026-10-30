@@ -283,18 +283,19 @@ struct queue_entry {
   u32 vp_ref_cnt,                      /* Number of owned VP frontier slots */
       vp_unresolved_ref_cnt;           /* Owned unresolved VP frontier slots*/
 
-  bool trim_done,                       /* Trimmed?                         */
-      vp_trim_deferred,                 /* VP-owner trim deferred?          */
-      was_fuzzed,                       /* historical, but needed for MOpt  */
-      passed_det,                       /* Deterministic stages passed?     */
-      has_new_cov,                      /* Triggers new coverage?           */
-      var_behavior,                     /* Variable behavior?               */
-      favored,                          /* Currently favored?               */
-      fs_redundant,                     /* Marked as redundant in the fs?   */
-      is_ascii,                         /* Is the input just ascii text?    */
-      disabled,                         /* Is disabled from fuzz selection  */
-      cache_wanted,                     /* Wanted in the testcase cache?    */
-      tightness_novel;          /* min-slack on inequality cmp; keep fav'ed */
+  bool trim_done,       /* Trimmed?                         */
+      vp_trim_deferred, /* VP-owner trim deferred?          */
+      was_fuzzed,       /* historical, but needed for MOpt  */
+      passed_det,       /* Deterministic stages passed?     */
+      has_new_cov,      /* Triggers new coverage?           */
+      var_behavior,     /* Variable behavior?               */
+      favored,          /* Currently favored?               */
+      fs_redundant,     /* Marked as redundant in the fs?   */
+      is_ascii,         /* Is the input just ascii text?    */
+      disabled,         /* Is disabled from fuzz selection  */
+      cache_wanted,     /* Wanted in the testcase cache?    */
+      tightness_novel,  /* min-slack on inequality cmp; keep fav'ed */
+      trap_productive;  /* trap mode: last fuzz_one found something */
 
   u32 bitmap_size,                      /* Number of bits set in bitmap     */
 #ifdef INTROSPECTION
@@ -1469,6 +1470,10 @@ u32  trap_count_bytes(afl_state_t *);
 u32  trap_count_virgin_entries(afl_state_t *);
 u8   calibrate_case_trap(afl_state_t *, struct queue_entry *, u8 *, u32, u8, u8,
                          u32);
+u8   save_if_interesting_trap(afl_state_t *, void *, u32, u8);
+void cull_queue_trap(afl_state_t *);
+u32  calculate_score_trap(afl_state_t *, struct queue_entry *);
+u8   trap_is_heavy_entry(afl_state_t *, struct queue_entry *);
 /* End of Trap based instrumentation */
 u8   save_if_interesting(afl_state_t *, void *, u32, u8);
 u8   has_new_bits(afl_state_t *, u8 *);

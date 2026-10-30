@@ -930,6 +930,9 @@ static void save_crash_core(afl_state_t *afl, u8 *crash_fn) {
 
 u8 __attribute__((hot)) save_if_interesting(afl_state_t *afl, void *mem,
                                             u32 len, u8 fault) {
+  if (unlikely(afl->trap_mode)) {
+    return save_if_interesting_trap(afl, mem, len, fault);
+  }
 
   if (unlikely(len == 0)) { return 0; }
 
