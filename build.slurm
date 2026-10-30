@@ -112,13 +112,14 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         -o $wrap/output/main.oracle
 elif [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
-        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
+    # -Xclang -disable-llvm-passes you can add this later for testing
+        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
             $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
             -o $wrap/output/main.oracle
     else
-        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
+        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
             $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
             -no-pie \
             -o $wrap/output/main.oracle
