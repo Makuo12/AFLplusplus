@@ -95,8 +95,8 @@ echo "Make target init"
 $BIN_PATH/clang -I $wrap/include -c -emit-llvm $wrap/wrapper/fuzzer.c -o $wrap/output/fuzzer.bc
 
 echo "Building edge-only binary"
-$BIN_PATH/clang++ $wrap/src/EdgeCount.cc $wrap/src/EdgeHandler.cc \
-    $wrap/src/PCTable.cc $wrap/src/Instrumentation.cc   \
+$BIN_PATH/clang++ $wrap/trap_instrumentation/EdgeCount.cc $wrap/trap_instrumentation/EdgeHandler.cc \
+    $wrap/trap_instrumentation/PCTable.cc $wrap/trap_instrumentation/Instrumentation.cc   \
     -I include -o $wrap/output/edge \
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
