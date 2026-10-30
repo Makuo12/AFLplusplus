@@ -40,7 +40,7 @@ if [[ "${1:-}" = "arc" ]]; then
     FULL_ID="${PROGRAM}_${ID}"
 
     wrap="$HOME/forkserver/AFLplusplus"         # same as build
-    AFLPP="$wrap/src"           # <-- your patched AFL++ directory
+    AFLPP="$wrap"           # <-- your patched AFL++ directory
     runner="$wrap/forkserver_runner"
     mkdir -p "$runner"
 
@@ -53,7 +53,7 @@ if [[ "${1:-}" = "arc" ]]; then
 else
     # run on my local linux machine
     wrap=$(pwd)
-    AFLPP="$wrap/src"           # <-- your patched AFL++ directory
+    AFLPP="$wrap"           # <-- your patched AFL++ directory
 
     ID="local_$(date +%s)_$$"
     FULL_ID="${PROGRAM}_${ID}"
