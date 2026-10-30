@@ -1927,6 +1927,10 @@ void afl_check_environment(afl_state_t *afl) {
     afl->disable_trim = 1;
 
   }
+  if (get_afl_env("AFL_TRAP_MODE")) {
+    afl->trap_mode = 1;
+    trap_mode_setup(afl);
+  }
 
   if (getenv("AFL_NO_UI") && getenv("AFL_FORCE_UI")) {
 
@@ -2862,6 +2866,9 @@ void afl_alloc_shared_memory(afl_state_t *afl) {
   afl->fsrv.trace_bits =
       afl_shm_init(&afl->shm, afl->fsrv.map_size, afl->non_instrumented_mode,
                    afl->perm, afl->chown_needed ? afl->fsrv.gid : -1);
+
+  trap_setup_shm(afl);
+
   afl->fsrv.child_sync_offset = afl->shm.child_sync_offset;
 
   #ifdef __AFL_CODE_COVERAGE
@@ -3879,6 +3886,7 @@ void stop_fuzzing(afl_state_t *afl) {
 
       }
 
+
       ZLIBCLOSE(afl->fr_fd);
       OKF("fastresume.bin successfully written with %u bytes.", w);
 
@@ -3894,6 +3902,7 @@ void stop_fuzzing(afl_state_t *afl) {
   destroy_extras(afl);
   destroy_custom_mutators(afl);
   afl_shm_deinit(&afl->shm);
+  trap_remove_shm(afl);
 
   if (afl->shm_fuzz) {
 

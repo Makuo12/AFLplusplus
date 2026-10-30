@@ -26,6 +26,7 @@
  */
 
 #include <signal.h>
+#include <sys/shm.h>
 #include <limits.h>
 #include "afl-fuzz.h"
 #include "cmplog.h"
@@ -36,6 +37,7 @@ char *power_names[POWER_SCHEDULES_NUM] = {"explore", "mmopt", "exploit",
                                           "quad",    "rare",  "seek"};
 
 /* Initializes an afl_state_t. */
+
 
 void afl_state_init(afl_state_t *afl, uint32_t map_size) {
 

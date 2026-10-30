@@ -697,55 +697,57 @@ typedef struct afl_state {
       exec_tmout_ceil,                  /* -t <n>+ ceiling, 0 if not given  */
       stats_update_freq;                /* Stats update frequency (execs)   */
 
-  u8 havoc_stack_pow2,                  /* HAVOC_STACK_POW2                 */
-      no_unlink,                        /* do not unlink cur_input          */
-      debug,                            /* Debug mode                       */
-      custom_only,                      /* Custom mutator only mode         */
-      custom_splice_optout,             /* Custom mutator no splice buffer  */
-      is_main_node,                     /* if this is the main node         */
-      is_secondary_node,                /* if this is a secondary instance  */
-      pizza_is_served,                  /* pizza mode                       */
-      input_mode,                       /* target wants text inputs         */
-      saved_input_mode,                 /* saved input mode                 */
+  u8 havoc_stack_pow2,      /* HAVOC_STACK_POW2                 */
+      no_unlink,            /* do not unlink cur_input          */
+      debug,                /* Debug mode                       */
+      custom_only,          /* Custom mutator only mode         */
+      custom_splice_optout, /* Custom mutator no splice buffer  */
+      is_main_node,         /* if this is the main node         */
+      is_secondary_node,    /* if this is a secondary instance  */
+      pizza_is_served,      /* pizza mode                       */
+      input_mode,           /* target wants text inputs         */
+      saved_input_mode,     /* saved input mode                 */
       fuzz_mode,          /* coverage/exploration or crash/exploitation mode */
-      schedule,                         /* Power schedule (default: EXPLORE)*/
-      saved_schedule,                   /* saved power schedule             */
-      coe_mu_cached,                   /* coe_fuzz_mu valid this build?     */
-      havoc_max_mult,                   /* havoc multiplier                 */
-      skip_deterministic,               /* Skip deterministic stages?       */
-      use_splicing,                     /* Recombine input files?           */
-      saved_use_splicing,               /* saved use splicing               */
-      non_instrumented_mode,            /* Run in non-instrumented mode?    */
-      score_changed,                    /* Scoring for favorites changed?   */
-      resuming_fuzz,                    /* Resuming an older fuzzing job?   */
-      timeout_given,                    /* Specific timeout given?          */
-      not_on_tty,                       /* stdout is not a tty              */
-      term_too_small,                   /* terminal dimensions too small    */
-      no_forkserver,                    /* Disable forkserver?              */
-      crash_mode,                       /* Crash mode! Yeah!                */
-      in_place_resume,                  /* Attempt in-place resume?         */
-      autoresume,                       /* Resume if afl->out_dir exists?   */
-      auto_changed,                     /* Auto-generated tokens changed?   */
-      no_cpu_meter_red,                 /* Feng shui on the status screen   */
-      no_arith,                         /* Skip most arithmetic ops         */
-      shuffle_queue,                    /* Shuffle input queue?             */
-      bitmap_changed,                   /* Time to update bitmap?           */
-      unicorn_mode,                     /* Running in Unicorn mode?         */
-      use_wine,                         /* Use WINE with QEMU mode          */
-      skip_requested,                   /* Skip request, via SIGUSR1        */
-      run_over10m,                      /* Run time over 10 minutes?        */
-      persistent_mode,                  /* Running in persistent mode?      */
-      deferred_mode,                    /* Deferred forkserver mode?        */
-      fixed_seed,                       /* do not reseed                    */
-      fast_cal,                         /* Try to calibrate faster?         */
-      disable_trim,                     /* Never trim in fuzz_one           */
-      shmem_testcase_mode,              /* If sharedmem testcases are used  */
-      expand_havoc,                /* perform expensive havoc after no find */
-      old_seed_selection,               /* use vanilla afl seed selection   */
-      reinit_table,                     /* reinit the queue weight table    */
-      starved,                          /* no finds for some time           */
+      schedule,           /* Power schedule (default: EXPLORE)*/
+      saved_schedule,     /* saved power schedule             */
+      coe_mu_cached,      /* coe_fuzz_mu valid this build?     */
+      havoc_max_mult,     /* havoc multiplier                 */
+      skip_deterministic, /* Skip deterministic stages?       */
+      use_splicing,       /* Recombine input files?           */
+      saved_use_splicing, /* saved use splicing               */
+      non_instrumented_mode, /* Run in non-instrumented mode?    */
+      score_changed,         /* Scoring for favorites changed?   */
+      trap_mode,             /* Trap-based instrumentation       */
+      trap_seen_cov,         /* any trap ever reported?          */
+      resuming_fuzz,         /* Resuming an older fuzzing job?   */
+      timeout_given,         /* Specific timeout given?          */
+      not_on_tty,            /* stdout is not a tty              */
+      term_too_small,        /* terminal dimensions too small    */
+      no_forkserver,         /* Disable forkserver?              */
+      crash_mode,            /* Crash mode! Yeah!                */
+      in_place_resume,       /* Attempt in-place resume?         */
+      autoresume,            /* Resume if afl->out_dir exists?   */
+      auto_changed,          /* Auto-generated tokens changed?   */
+      no_cpu_meter_red,      /* Feng shui on the status screen   */
+      no_arith,              /* Skip most arithmetic ops         */
+      shuffle_queue,         /* Shuffle input queue?             */
+      bitmap_changed,        /* Time to update bitmap?           */
+      unicorn_mode,          /* Running in Unicorn mode?         */
+      use_wine,              /* Use WINE with QEMU mode          */
+      skip_requested,        /* Skip request, via SIGUSR1        */
+      run_over10m,           /* Run time over 10 minutes?        */
+      persistent_mode,       /* Running in persistent mode?      */
+      deferred_mode,         /* Deferred forkserver mode?        */
+      fixed_seed,            /* do not reseed                    */
+      fast_cal,              /* Try to calibrate faster?         */
+      disable_trim,          /* Never trim in fuzz_one           */
+      shmem_testcase_mode,   /* If sharedmem testcases are used  */
+      expand_havoc,          /* perform expensive havoc after no find */
+      old_seed_selection,    /* use vanilla afl seed selection   */
+      reinit_table,          /* reinit the queue weight table    */
+      starved,               /* no finds for some time           */
       starve_minimize,       /* starved: 1 rescore, 2 minimize queue, 3 done */
-      prefer_unfuzzed;            /* fuzz unfuzzed entries before starving  */
+      prefer_unfuzzed;       /* fuzz unfuzzed entries before starving  */
 
   u8 *virgin_bits,                      /* Regions yet untouched by fuzzing */
       *virgin_tmout,                    /* Bits we haven't seen in tmouts   */
@@ -873,6 +875,11 @@ typedef struct afl_state {
 
   u64 total_cal_us,                     /* Total calibration time (us)      */
       total_cal_cycles;                 /* Total calibration cycles         */
+
+  s32  trap_virgin_shm_id; /* trap mode: SysV id of virgin map */
+  u64  trap_total_len;     /* trap mode: sum of calibrated lens*/
+  u32 *trap_virgin_bits;   /* trap mode: harness-owned virgin  */
+
 
   u64 total_bitmap_size,                /* Total bit count for all bitmaps  */
       total_bitmap_entries;             /* Number of bitmaps counted        */
@@ -1453,6 +1460,16 @@ void minimize_bits(afl_state_t *, u8 *, u8 *);
 #ifndef SIMPLE_FILES
 u8 *describe_op(afl_state_t *, u8, size_t);
 #endif
+/* Trap based instrumentation */
+void trap_mode_setup(afl_state_t *);
+void trap_setup_shm(afl_state_t *);
+void trap_remove_shm(afl_state_t *);
+u8   has_new_traps(afl_state_t *);
+u32  trap_count_bytes(afl_state_t *);
+u32  trap_count_virgin_entries(afl_state_t *);
+u8   calibrate_case_trap(afl_state_t *, struct queue_entry *, u8 *, u32, u8, u8,
+                         u32);
+/* End of Trap based instrumentation */
 u8   save_if_interesting(afl_state_t *, void *, u32, u8);
 u8   has_new_bits(afl_state_t *, u8 *);
 void virgin_undo_arm(afl_state_t *);

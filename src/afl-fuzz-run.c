@@ -376,7 +376,9 @@ u32 __attribute__((hot)) write_to_testcase(afl_state_t *afl, void **mem,
 
 u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
                   u32 handicap, u8 from_queue) {
-
+  if (unlikely(afl->trap_mode)) {
+    return calibrate_case_trap(afl, q, use_mem, handicap, from_queue, 0, 0);
+  }
   u8 fault = 0, new_bits = 0, var_detected = 0, new_var = 0, hnb = 0,
      first_run = (q->exec_cksum == 0);
   u64 start_us, stop_us, diff_us;

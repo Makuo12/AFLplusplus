@@ -550,6 +550,25 @@ We add 4 byte for one u32 length field. */
   #define MAP_INITIAL_SIZE MAP_SIZE
 #endif
 
+/* Env var carrying the SysV id of the harness-owned virgin map. */
+#ifndef SHM_ID
+  #define SHM_ID "__AFL_TRAP_VIRGIN_SHM_ID"
+#endif
+#define TRAP_SHM_ENV_VAR SHM_ID
+
+/* u32 entries in the virgin map (= trap id space). The harness checks ids
+   against MAP_SIZE, so keep both equal. */
+#ifndef TRAP_VIRGIN_WORDS
+  #define TRAP_VIRGIN_WORDS MAP_SIZE
+#endif
+
+/* u32 words of the trace map the harness writes; only [0] and [3] used. */
+#ifndef MAP_SIZE_TRACE
+  #define MAP_SIZE_TRACE 4
+#endif
+#define TRAP_NEW_EDGE_IDX 0
+#define TRAP_NEW_LOOP_IDX 3
+
 /* IJON max tracking map configuration */
 
 /* Number of IJON slots (power-of-2 for efficient bitmasking) */

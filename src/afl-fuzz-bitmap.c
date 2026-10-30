@@ -165,7 +165,9 @@ u32 count_bits(afl_state_t *afl, u8 *mem) {
    new paths. */
 
 u32 count_bytes(afl_state_t *afl, u8 *mem) {
-
+  if (unlikely(afl->trap_mode && mem == afl->fsrv.trace_bits)) {
+    return trap_count_bytes(afl);
+  }
   u32 *ptr = (u32 *)mem;
   u32  i = ((afl->fsrv.real_map_size + 3) >> 2);
   u32  ret = 0;
@@ -190,7 +192,9 @@ u32 count_bytes(afl_state_t *afl, u8 *mem) {
    status screen, several calls per second or so. */
 
 u32 count_non_255_bytes(afl_state_t *afl, u8 *mem) {
-
+  if (unlikely(afl->trap_mode && mem == afl->virgin_bits)) {
+    return trap_count_virgin_entries(afl);
+  }
   u32 *ptr = (u32 *)mem;
   u32  i = ((afl->fsrv.real_map_size + 3) >> 2);
   u32  ret = 0;
