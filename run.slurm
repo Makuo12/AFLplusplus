@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=forkserver_run
+#SBATCH --job-name=de_forkserver_run
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --time=25:30:00
@@ -30,7 +30,7 @@ export AFL_NO_SYNC=1                    # don't import other instances' inputs
 
 FUZZ_SECONDS=$((24*60*60))
 ORACLE="main.oracle"
-PROGRAM="forkserver_aflpp"
+PROGRAM="de_forkserver_aflpp"
 
 
 if [[ "${1:-}" = "arc" ]]; then
@@ -39,9 +39,9 @@ if [[ "${1:-}" = "arc" ]]; then
     ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
     FULL_ID="${PROGRAM}_${ID}"
 
-    wrap="$HOME/forkserver/AFLplusplus"         # same as build
+    wrap="$HOME/de_forkserver/AFLplusplus"         # same as build
     AFLPP="$wrap"           # <-- your patched AFL++ directory
-    runner="$wrap/forkserver_runner"
+    runner="$wrap/de_forkserver_runner"
     mkdir -p "$runner"
 
     output="$runner/output_${ID}"       # per-task copy
@@ -83,7 +83,7 @@ if [[ "${1:-}" = "arc" ]]; then
     export DE_EDGE_ARC=1                # bfd + --image-base, like the arc build
 fi
 
-tmp_input="$tmp_base/forkserver_${FULL_ID}"
+tmp_input="$tmp_base/de_forkserver_${FULL_ID}"
 OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output
 RESULTS_DIR="$output/results"           # persistent results
 SUT_ORACLE="$output/$ORACLE"

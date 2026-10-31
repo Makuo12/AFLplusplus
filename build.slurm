@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=forkserver_build
+#SBATCH --job-name=de_forkserver_build
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --constraint=amd
@@ -18,7 +18,7 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/forkserver/AFLplusplus"
+    wrap="$HOME/de_forkserver/AFLplusplus"
     echo "Building afl-fuzz (AFL++ with trap mode)"
     make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 else
