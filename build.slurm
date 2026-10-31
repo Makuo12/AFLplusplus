@@ -102,7 +102,7 @@ $BIN_PATH/clang++ $wrap/trap_instrumentation/EdgeCount.cc $wrap/trap_instrumenta
     $(llvm-config --system-libs) $PERF_FLAGS
 
 echo "Building de-instrumentation tool"
-$BIN_PATH/clang++ $wrap/src/DeIntrumentation.cc \
+$BIN_PATH/clang++ $wrap/trap_instrumentation/DeIntrumentation.cc \
     -I include -o $wrap/output/remove_edge \
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
