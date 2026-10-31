@@ -1474,7 +1474,7 @@ u8   save_if_interesting_trap(afl_state_t *, void *, u32, u8);
 void cull_queue_trap(afl_state_t *);
 u32  calculate_score_trap(afl_state_t *, struct queue_entry *);
 u8   trap_is_heavy_entry(afl_state_t *, struct queue_entry *);
-
+u8   trap_log_due(void);
 /* De-instrumentation (trap mode), src/afl-fuzz-deinstr.c */
 void deinstr_setup(afl_state_t *);
 void deinstr_note_run(afl_state_t *);

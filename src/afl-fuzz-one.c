@@ -474,8 +474,7 @@ u8 fuzz_one(afl_state_t *afl) {
 
 #endif
 
-  if (likely(afl->not_on_tty)) {
-
+  if (likely(afl->not_on_tty) && (likely(!afl->trap_mode) || trap_log_due())) {
     u8 time_tmp[64];
 
     u_simplestring_time_diff(time_tmp, afl->prev_run_time + get_cur_time(),
@@ -541,7 +540,6 @@ u8 fuzz_one(afl_state_t *afl) {
       fflush(stdout);
 
     }
-
   }
 
   orig_in = in_buf = queue_testcase_get(afl, afl->queue_cur);
