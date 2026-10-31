@@ -619,6 +619,8 @@ We add 4 byte for one u32 length field. */
 
 #define AFL_QEMU_NOT_ZERO
 
+#define TRAP_NEW_LOOPHDR_IDX 1 /* loop header hit for the first time */
+
 /* Trap CULL */
 /* Favored-set culling (cull_queue_trap): cutoff = mean + K * sd of
    W_TIME*ln(exec_us+1) + W_LEN*ln(len+1) [+ ln(NEWCOV_BONUS) if +cov]. */

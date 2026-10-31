@@ -880,7 +880,7 @@ typedef struct afl_state {
   s32  trap_virgin_shm_id; /* trap mode: SysV id of virgin map */
   u64  trap_total_len;     /* trap mode: sum of calibrated lens*/
   u32 *trap_virgin_bits;   /* trap mode: harness-owned virgin  */
-
+  u64  trap_virgin_count;  /* trap ids ever reported (edges)  */
 
   u64 total_bitmap_size,                /* Total bit count for all bitmaps  */
       total_bitmap_entries;             /* Number of bitmaps counted        */

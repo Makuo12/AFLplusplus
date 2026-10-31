@@ -106,6 +106,8 @@ static inline void record_hit(int32_t idx, uint32_t val, int is_loop) {
     trace_bits[0]++; /* new edge */
   else
     trace_bits[3]++; /* new or higher loop bucket */
+  if (old == 0 && is_loop)
+    trace_bits[1]++; /* loop header hit for the first time */
 }
 
 void trap_handler(int sig, siginfo_t *info, void *ctx) {

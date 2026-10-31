@@ -109,14 +109,9 @@ u32 trap_count_bytes(afl_state_t *afl) {
    This is what the UI and fuzzer_stats show as "edges found". */
 
 u32 trap_count_virgin_entries(afl_state_t *afl) {
-  u32 i, ret = 0;
-  if (!afl->trap_virgin_bits) { return 0; }
-
-  for (i = 0; i < TRAP_VIRGIN_WORDS; i++) {
-    if (afl->trap_virgin_bits[i]) { ++ret; }
-  }
-
-  return ret;
+  /* Kept up to date in fuzz_run_target() from the harness's first-hit
+     counters, instead of scanning all TRAP_VIRGIN_WORDS entries. */
+  return (u32)afl->trap_virgin_count;
 }
 
 /* prior_hnb / prior_cnt carry the novelty of the run that discovered the
