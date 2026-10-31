@@ -623,7 +623,7 @@ We add 4 byte for one u32 length field. */
 
 /* trap mode + AFL_NO_UI: print the per-entry "Fuzzing test case #..." line
    at most this often (ms). fuzzer_stats / plot_data have the numbers. */
-#define TRAP_LOG_INTERVAL_MS 60000
+#define TRAP_LOG_INTERVAL_MS 180000 /* 3 minutes */
 
 /* Trap CULL */
 /* Favored-set culling (cull_queue_trap): cutoff = mean + K * sd of
