@@ -1474,6 +1474,7 @@ u8   save_if_interesting_trap(afl_state_t *, void *, u32, u8);
 void cull_queue_trap(afl_state_t *);
 u32  calculate_score_trap(afl_state_t *, struct queue_entry *);
 u8   trap_is_heavy_entry(afl_state_t *, struct queue_entry *);
+u8   trap_log_due(void);
 /* End of Trap based instrumentation */
 u8   save_if_interesting(afl_state_t *, void *, u32, u8);
 u8   has_new_bits(afl_state_t *, u8 *);

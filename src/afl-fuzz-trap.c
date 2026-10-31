@@ -640,3 +640,16 @@ u8 trap_is_heavy_entry(afl_state_t *afl, struct queue_entry *q) {
 
   return 0;
 }
+
+/* Rate limit for the per-entry status line in fuzz_one() (AFL_NO_UI). AFL++
+   fuzzes each entry in short rounds, so without this the job log gets one
+   line per round - thousands per hour. */
+
+u8 trap_log_due(void) {
+  static u64 last_ms;
+  u64        now = get_cur_time();
+
+  if (last_ms && now - last_ms < TRAP_LOG_INTERVAL_MS) { return 0; }
+  last_ms = now;
+  return 1;
+}
