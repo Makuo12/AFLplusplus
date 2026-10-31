@@ -45,12 +45,72 @@ typedef unsigned char u8;
 uint32_t *virgin_bits;
 uint32_t *trace_bits;
 
+static int meta_file_fd = -1;
+static int loop_threshold_fd = -1;
+
 #define DEFAULT_LOG_PATH "./output/trap_handler.log"
 static char log_path[4096] = DEFAULT_LOG_PATH;
+
+void log_line(const char *fmt, ...);
+static void sig_log(const char *msg, uintptr_t val);
 
 static void init_log_path(void) {
   const char *p = getenv("LOG_FILE");
   if (p && *p && strlen(p) < sizeof(log_path)) { strcpy(log_path, p); }
+}
+
+static int open_append_env(const char *env_name) {
+  const char *path = getenv(env_name);
+  if (!path || strlen(path) < 2) {
+    log_line("%s not set\n", env_name);
+    exit(EXIT_FAILURE);
+  }
+
+  /* O_APPEND: every write lands at the end, even after a harness restart. */
+  int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0644);
+  if (fd < 0) {
+    log_line("cannot open %s (%s): %s\n", env_name, path, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+  return fd;
+}
+
+/* async-signal-safe: format "<a>[,<b>]\n" into buf, return length */
+static size_t fmt_i32(char *p, int32_t v) {
+  char     tmp[12];
+  size_t   n = 0, len = 0;
+  uint32_t u = v < 0 ? (uint32_t)0 - (uint32_t)v : (uint32_t)v;
+  if (v < 0) p[len++] = '-';
+  do {
+    tmp[n++] = '0' + u % 10;
+    u /= 10;
+  } while (u);
+  while (n)
+    p[len++] = tmp[--n];
+  return len;
+}
+
+static void meta_data_dump(int32_t meta_id) {
+  char   buf[16];
+  size_t n = fmt_i32(buf, meta_id);
+  buf[n++] = '\n';
+  if (write(meta_file_fd, buf, n) != (ssize_t)n)
+    sig_log("meta write failed, id=", (uintptr_t)(uint32_t)meta_id);
+}
+
+static void loop_threshold_write(int32_t meta_id, int32_t cmp_value) {
+  char   buf[32];
+  size_t n = fmt_i32(buf, meta_id);
+  buf[n++] = ',';
+  n += fmt_i32(buf + n, cmp_value);
+  buf[n++] = '\n';
+  if (write(loop_threshold_fd, buf, n) != (ssize_t)n)
+    sig_log("threshold write failed, id=", (uintptr_t)(uint32_t)meta_id);
+}
+
+static void setup_fd(void) {
+  loop_threshold_fd = open_append_env("LOOP_THRESHOLD_FILE");
+  meta_file_fd = open_append_env("META_DATA_FILE");
 }
 
 /* ------------------------------------------------------------------ */
@@ -142,9 +202,11 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
     if (new_value >= MAX_LOOP) {
       memset(trap, 0x90, 9);
       resume_addr = addr + 9;
+      meta_data_dump(index_block);
     } else {
       memcpy((void *)num_addr, &new_value, sizeof(new_value));
       resume_addr = cmp_addr;
+      loop_threshold_write(index_block, new_value);
     }
 
     if (new_value <= LOOP_START_ADD)
@@ -159,6 +221,7 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
     memset(trap, 0x90, 5);
     resume_addr = addr + 5;
     record_hit(index_block, 1, 0);
+    meta_data_dump(index_block);
   } else {
     sig_log("failed at addr=", addr);
     sig_log("            offset=", addr - 0x400000);
@@ -395,6 +458,7 @@ static void collect_traps(void) {
 
 int main(int argc, char **argv) {
   init_log_path();
+  setup_fd();
   if (argc < 2) {
     log_line("usage: harness <input_file>\n");
     exit(EXIT_FAILURE);

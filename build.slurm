@@ -18,16 +18,15 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/forkserver/AFL"
-    AFLPP="$HOME/AFLplusplus"          # ← your patched AFL++ directory
+    wrap="$HOME/forkserver/AFLplusplus"
     echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$AFLPP" afl-fuzz NO_PYTHON=1 NO_NYX=1
+    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 else
     export LLVM_CC_NAME=clang-20        # ← pin to version 20
     export LLVM_CXX_NAME=clang++-20     # ← pin to version 20
     wrap=$(pwd)
     echo "Building afl-fuzz (AFL++ with trap mode)"
-    make afl-fuzz NO_PYTHON=1 NO_NYX=1
+    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 fi
 
 export BASE_ADDRESS=0x400000
@@ -102,6 +101,12 @@ $BIN_PATH/clang++ $wrap/trap_instrumentation/EdgeCount.cc $wrap/trap_instrumenta
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
 
+echo "Building de-instrumentation tool"
+$BIN_PATH/clang++ $wrap/src/DeIntrumentation.cc \
+    -I include -o $wrap/output/remove_edge \
+    $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
+    $(llvm-config --system-libs) $PERF_FLAGS
+
 $wrap/output/edge "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
 
 echo "Building final binary"
@@ -114,13 +119,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 elif [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
     # -Xclang -disable-llvm-passes you can add this later for testing
-        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
             $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
             -o $wrap/output/main.oracle
     else
-        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
             $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
             -no-pie \
             -o $wrap/output/main.oracle

@@ -90,6 +90,7 @@ fsrv_run_result_t __attribute__((hot)) fuzz_run_target(afl_state_t      *afl,
   if (unlikely(afl->trap_mode) && fsrv == &afl->fsrv) {
     u32 *t = (u32 *)fsrv->trace_bits;
     afl->trap_virgin_count += t[TRAP_NEW_EDGE_IDX] + t[TRAP_NEW_LOOPHDR_IDX];
+    deinstr_note_run(afl);
   }
 
 #ifdef __AFL_CODE_COVERAGE
@@ -1281,6 +1282,10 @@ u8 __attribute__((hot)) common_fuzz_stuff(afl_state_t *afl, u8 *out_buf,
       afl->stage_cur + 1 == afl->stage_max) {
     show_stats(afl);
   }
+
+  /* trap mode: rebuild the target without retired traps once enough new
+     coverage has accumulated (src/afl-fuzz-deinstr.c) */
+  if (unlikely(afl->trap_mode)) { maybe_deinstrument(afl); }
 
   return 0;
 }

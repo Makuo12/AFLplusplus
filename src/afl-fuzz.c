@@ -2129,6 +2129,7 @@ void afl_setup_environment(afl_state_t *afl) {
   }
 
   check_binary(afl, afl->argv_cpy[optind]);
+  deinstr_setup(afl); /* trap mode: de-instrumentation cfg */
 
   u64 prev_target_hash = 0;
 

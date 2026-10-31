@@ -65,6 +65,24 @@ else
     tmp_base="/tmp"
 fi
 
+# --- de-instrumentation ----------------------------------------------------
+# Harness-written files (REQUIRED by the harness, it exits if unset).
+# Kept next to the AFL++ output dir, like LOG_FILE.
+export META_DATA_FILE="$tmp_base/${FULL_ID}_meta_data.txt"
+export LOOP_THRESHOLD_FILE="$tmp_base/${FULL_ID}_loop_threshold.txt"
+: > "$META_DATA_FILE"                   # start each run with empty files
+: > "$LOOP_THRESHOLD_FILE"
+
+# Rebuild inputs: remove_edge, main.transformed.ll, fuzzer.bc. Must be the
+# per-task copy: the rebuild rewrites main.transformed.ll and main.oracle.
+export OUTPUT_HOME="$output"
+export DE_EDGE_MAX=4000
+export DE_CLANGXX="$(llvm-config --bindir)/clang++"   # same clang as the build
+export BASE_ADDRESS=0x400000
+if [[ "${1:-}" = "arc" ]]; then
+    export DE_EDGE_ARC=1                # bfd + --image-base, like the arc build
+fi
+
 tmp_input="$tmp_base/forkserver_${FULL_ID}"
 OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output
 RESULTS_DIR="$output/results"           # persistent results
