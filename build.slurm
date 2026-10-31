@@ -10,6 +10,10 @@
 #SBATCH --output=./logs/build-%j.log
 #SBATCH --error=./logs/build-%j.log
 
+# Trap-mode AFL++ WITHOUT de-instrumentation.
+# $wrap is the patched AFL++ checkout; it must be the same directory the run
+# script uses (it copies $wrap/output from there).
+
 set -e
 
 if [ "${1:-}" = "arc" ]; then
@@ -18,17 +22,15 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/forkserver/AFL"
-    AFLPP="$HOME/AFLplusplus"          # ← your patched AFL++ directory
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$AFLPP" afl-fuzz NO_PYTHON=1 NO_NYX=1
+    wrap="$HOME/forkserver/AFLplusplus"   # same as the run script
 else
-    export LLVM_CC_NAME=clang-20        # ← pin to version 20
-    export LLVM_CXX_NAME=clang++-20     # ← pin to version 20
-    wrap=$(pwd)
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make afl-fuzz NO_PYTHON=1 NO_NYX=1
+    export LLVM_CC_NAME=clang-20          # pin to version 20
+    export LLVM_CXX_NAME=clang++-20       # pin to version 20
+    wrap=$(pwd)                           # run from the AFL++ checkout
 fi
+
+echo "Building afl-fuzz (AFL++ with trap mode)"
+make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 
 export BASE_ADDRESS=0x400000
 
@@ -38,19 +40,16 @@ LIB_PATH="$(llvm-config --libdir)"
 BIN_PATH="$(llvm-config --bindir)"
 export LLVM_COMPILER=clang
 
-rm -rf $wrap/output
-mkdir -p $wrap/output
+rm -rf "$wrap/output"
+mkdir -p "$wrap/output"
 
 echo "Building llvm passes"
-rm -rf $wrap/build
+rm -rf "$wrap/build"
 
-cmake -B $wrap/build \
-      -DLLVM_DIR=$LIB_PATH/cmake/llvm \
+cmake -B "$wrap/build" \
+      -DLLVM_DIR="$LIB_PATH/cmake/llvm" \
       -DCMAKE_BUILD_TYPE=Release 2>&1 | cat
-make -C $wrap/build -j$(nproc)
-
-
-echo "Building utils"
+make -C "$wrap/build" -j"$(nproc)"
 
 echo "Building xpdf with custom coverage tracer..."
 SRC="$wrap/targets/xpdf-4.06_2"
@@ -80,52 +79,55 @@ cmake -S "$SRC" -B "$BUILD" \
 cmake --build "$BUILD" -j"$(nproc)"
 
 echo "Extract whole-program bitcode from the final binary"
-extract-bc $BUILD/xpdf/pdftotext -o $wrap/output/whole_program.bc
+extract-bc "$BUILD/xpdf/pdftotext" -o "$wrap/output/whole_program.bc"
 
-echo "Currently at $(pwd)"
 $BIN_PATH/opt \
-    -load-pass-plugin=$wrap/build/Untracer.so \
+    -load-pass-plugin="$wrap/build/Untracer.so" \
     -passes="rename" \
-    $wrap/output/whole_program.bc -o $wrap/output/out.bc
+    "$wrap/output/whole_program.bc" -o "$wrap/output/out.bc"
 
 echo "Disassembling bitcode to LLVM IR"
-llvm-dis $wrap/output/out.bc -o $wrap/output/out.ll
+llvm-dis "$wrap/output/out.bc" -o "$wrap/output/out.ll"
 
+# Harness. $wrap/include is AFL++'s include dir, so fuzzer.c gets the same
+# config.h (TRAP_VIRGIN_WORDS, SHM_ID, MAP_SIZE_TRACE) as afl-fuzz.
 echo "Make target init"
-    $BIN_PATH/clang -O2 -I $wrap/include \
-    -c -emit-llvm $wrap/wrapper/fuzzer.c -o $wrap/output/fuzzer.bc
+$BIN_PATH/clang -O2 -funroll-loops -I "$wrap/include" \
+    -c -emit-llvm "$wrap/wrapper/fuzzer.c" -o "$wrap/output/fuzzer.bc"
 
 echo "Building edge-only binary"
-$BIN_PATH/clang++ $wrap/trap_instrumentation/EdgeCount.cc $wrap/trap_instrumentation/EdgeHandler.cc \
-    $wrap/trap_instrumentation/PCTable.cc $wrap/trap_instrumentation/Instrumentation.cc   \
-    -I include -o $wrap/output/edge \
+$BIN_PATH/clang++ "$wrap/trap_instrumentation/EdgeCount.cc" "$wrap/trap_instrumentation/EdgeHandler.cc" \
+    "$wrap/trap_instrumentation/PCTable.cc" "$wrap/trap_instrumentation/Instrumentation.cc" \
+    -I "$wrap/include" -o "$wrap/output/edge" \
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
 
-$wrap/output/edge "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
+"$wrap/output/edge" "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
 
+# Final link. -Xclang -disable-llvm-passes: the IR is already -O3 code with
+# the traps placed exactly where the passes put them; only generate code,
+# don't re-optimize (inlining / unrolling could duplicate traps). Same as the
+# de-instrumentation build, so both variants are compiled identically.
 echo "Building final binary"
 if [[ "$(uname -s)" == "Darwin" ]]; then
     INCLUDE="-isysroot $(xcrun --show-sdk-path)"
-    $BIN_PATH/clang++  $INCLUDE  \
-        $wrap/output/main.transformed.ll $wrap/output/fuzzer.bc \
+    $BIN_PATH/clang++ $INCLUDE \
+        "$wrap/output/main.transformed.ll" "$wrap/output/fuzzer.bc" \
         -L/opt/homebrew/opt/fontconfig/lib -lfontconfig \
-        -o $wrap/output/main.oracle
+        -o "$wrap/output/main.oracle"
 elif [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
-    # -Xclang -disable-llvm-passes you can add this later for testing
-        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
-            $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
+            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer.bc" \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
-            -o $wrap/output/main.oracle
+            -o "$wrap/output/main.oracle"
     else
-        $BIN_PATH/clang++ $PERF_FLAGS -I $wrap/include \
-            $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
+            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer.bc" \
             -no-pie \
-            -o $wrap/output/main.oracle
+            -o "$wrap/output/main.oracle"
     fi
-    cp  $wrap/output/main.oracle $wrap/output/main.trace           # This is just a dummy file to satisfy the fuzzer's expectations. The actual tracing is done by the instrumentation pass.
 else
     echo "Unknown OS: $(uname -s)"
     exit 1

@@ -11,6 +11,8 @@
 #SBATCH --error=./logs/fuzz-%j.log
 #SBATCH --array=1-5
 
+# Trap-mode AFL++ WITHOUT de-instrumentation.
+
 set -euo pipefail
 
 echo "node=$(hostname -s) cpu=$(lscpu | grep 'Model name' | sed 's/.*: *//')"
@@ -28,9 +30,13 @@ export AFL_NO_SYNC=1                    # don't import other instances' inputs
 # Trimming, frameshift, deterministic stages and CmpLog are turned off by
 # AFL_TRAP_MODE automatically; no need to set AFL_DISABLE_TRIM.
 
+# No de-instrumentation in this variant. SLURM passes the submitting shell's
+# environment to the job, so make sure nothing switches it on by accident.
+unset OUTPUT_HOME META_DATA_FILE LOOP_THRESHOLD_FILE DE_EDGE_MAX DE_EDGE_ARC DE_CLANGXX
+
 FUZZ_SECONDS=$((24*60*60))
 ORACLE="main.oracle"
-PROGRAM="forkserver_aflpp"
+PROGRAM="forkserver_aflpp_nodeinstr"    # distinct from the de-instrumentation runs
 
 
 if [[ "${1:-}" = "arc" ]]; then
@@ -39,26 +45,26 @@ if [[ "${1:-}" = "arc" ]]; then
     ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
     FULL_ID="${PROGRAM}_${ID}"
 
-    wrap="$HOME/forkserver/AFLplusplus"         # same as build
-    AFLPP="$wrap"           # <-- your patched AFL++ directory
+    wrap="$HOME/forkserver/AFLplusplus"   # same as build
+    AFLPP="$wrap"                         # patched AFL++ directory
     runner="$wrap/forkserver_runner"
     mkdir -p "$runner"
 
-    output="$runner/output_${ID}"       # per-task copy
+    output="$runner/output_${FULL_ID}"    # per-task copy
     rm -rf "$output"
     mkdir -p "$output"
-    cp -r "$wrap/output/." "$output/"   # everything: binaries, .bc, .ll, ...
+    cp -r "$wrap/output/." "$output/"     # everything: binaries, .bc, .ll, ...
 
     tmp_base="${TMPDIR:-/tmp}"
 else
     # run on my local linux machine
     wrap=$(pwd)
-    AFLPP="$wrap"           # <-- your patched AFL++ directory
+    AFLPP="$wrap"                         # patched AFL++ directory
 
     ID="local_$(date +%s)_$$"
     FULL_ID="${PROGRAM}_${ID}"
 
-    output="$wrap/output_$ID"
+    output="$wrap/output_${FULL_ID}"
     mkdir -p "$output"
     cp -r "$wrap/output/." "$output/"
 
