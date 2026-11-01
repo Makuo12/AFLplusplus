@@ -23,15 +23,17 @@ if [ "${1:-}" = "arc" ]; then
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
     wrap="$HOME/forkserver/AFLplusplus"
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 else
     export LLVM_CC_NAME=clang-20        # ← pin to version 20
     export LLVM_CXX_NAME=clang++-20     # ← pin to version 20
     wrap=$(pwd)
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 fi
+
+echo "Building afl-fuzz (AFL++ with trap mode)"
+# Remove objects from earlier builds: -flto object files only link with the
+# same GCC version that created them (GCC 11 objects + GCC 14 link = error).
+rm -f "$wrap"/src/*.o "$wrap"/afl-fuzz
+make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 
 export BASE_ADDRESS=0x400000
 
