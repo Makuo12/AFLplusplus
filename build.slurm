@@ -22,15 +22,16 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/forkserver/AFLplusplus"   # same as the run script
+    wrap="$HOME/forkserver/AFLplusplus"
+    echo "Building afl-fuzz (AFL++ with trap mode)"
+    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 else
-    export LLVM_CC_NAME=clang-20          # pin to version 20
-    export LLVM_CXX_NAME=clang++-20       # pin to version 20
-    wrap=$(pwd)                           # run from the AFL++ checkout
+    export LLVM_CC_NAME=clang-20        # ← pin to version 20
+    export LLVM_CXX_NAME=clang++-20     # ← pin to version 20
+    wrap=$(pwd)
+    echo "Building afl-fuzz (AFL++ with trap mode)"
+    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 fi
-
-echo "Building afl-fuzz (AFL++ with trap mode)"
-make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 
 export BASE_ADDRESS=0x400000
 
