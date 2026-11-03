@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=forkserver_build
+#SBATCH --job-name=single_build
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --constraint=amd
@@ -22,7 +22,7 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/forkserver/AFLplusplus"
+    wrap="$HOME/single/AFLplusplus"
 else
     export LLVM_CC_NAME=clang-20        # ← pin to version 20
     export LLVM_CXX_NAME=clang++-20     # ← pin to version 20

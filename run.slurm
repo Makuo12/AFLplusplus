@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=forkserver_run
+#SBATCH --job-name=single_run
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --time=25:30:00
@@ -36,7 +36,7 @@ unset OUTPUT_HOME META_DATA_FILE LOOP_THRESHOLD_FILE DE_EDGE_MAX DE_EDGE_ARC DE_
 
 FUZZ_SECONDS=$((24*60*60))
 ORACLE="main.oracle"
-PROGRAM="forkserver_aflpp_nodeinstr"    # distinct from the de-instrumentation runs
+PROGRAM="single_aflpp_nodeinstr"    # distinct from the de-instrumentation runs
 
 
 if [[ "${1:-}" = "arc" ]]; then
@@ -45,9 +45,9 @@ if [[ "${1:-}" = "arc" ]]; then
     ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
     FULL_ID="${PROGRAM}_${ID}"
 
-    wrap="$HOME/forkserver/AFLplusplus"   # same as build
+    wrap="$HOME/single/AFLplusplus"   # same as build
     AFLPP="$wrap"                         # patched AFL++ directory
-    runner="$wrap/forkserver_runner"
+    runner="$wrap/single_runner"
     mkdir -p "$runner"
 
     output="$runner/output_${FULL_ID}"    # per-task copy
@@ -71,7 +71,7 @@ else
     tmp_base="/tmp"
 fi
 
-tmp_input="$tmp_base/forkserver_${FULL_ID}"
+tmp_input="$tmp_base/single_${FULL_ID}"
 OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output
 RESULTS_DIR="$output/results"           # persistent results
 SUT_ORACLE="$output/$ORACLE"
