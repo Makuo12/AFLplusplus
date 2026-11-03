@@ -33,10 +33,27 @@ extern const struct mach_header_64 _mh_execute_header;
 #endif
 
 /* ------------------------------------------------------------------ */
+/* Persistent mode                                                    */
+/* ------------------------------------------------------------------ */
+
+/* afl-fuzz scans the target binary for this string (check_binary) and, if
+   it is there, switches to persistent mode: it then expects a child to stop
+   itself (SIGSTOP) after each input instead of exiting. __AFL_LOOP embeds
+   the same string in AFL++-instrumented targets. "used" keeps the compiler
+   from dropping it. */
+static volatile const char *persist_sig __attribute__((used)) = PERSIST_SIG;
+
+/* Inputs per child before it exits and the forkserver forks a fresh one
+   (like the N in __AFL_LOOP(N)). Bounds state that leaks between inputs.
+   Override with TRAP_PERSIST_CNT. */
+#ifndef TRAP_PERSIST_CNT_DEFAULT
+  #define TRAP_PERSIST_CNT_DEFAULT 5000
+#endif
+
+/* ------------------------------------------------------------------ */
 /* Prototypes for externally-defined symbols                          */
 /* ------------------------------------------------------------------ */
 
-// extern void __reset_loop_counters(void);
 extern int  target_main(int argc, char **argv);
 extern void __reset_loop_counters(void);
 
@@ -227,44 +244,92 @@ void setup_shm(void) {
   trace_bits = attach_shm(SHM_ENV_VAR, MAP_SIZE_TRACE);
 }
 
+/* ------------------------------------------------------------------ */
+/* Forkserver, persistent mode (same protocol as AFL++'s              */
+/* __afl_start_forkserver + __afl_persistent_loop, classic SIGSTOP     */
+/* variant)                                                           */
+/* ------------------------------------------------------------------ */
+
+/* The child: runs up to persist_cnt inputs. Between inputs it stops itself;
+   the forkserver sees WIFSTOPPED, reports the run as done, and resumes it
+   with SIGCONT once afl-fuzz has written the next input to the @@ file.
+   After the last input it exits, and the forkserver forks a fresh child. */
+static void run_child(char **args, uint32_t persist_cnt) {
+  close(FORKSRV_FD); /* don't hold afl's pipes open */
+  close(FORKSRV_FD + 1);
+
+  for (uint32_t i = 0; i < persist_cnt; i++) {
+    /* Input i-1 is done: pause until the next one (= raise(SIGSTOP) in
+       __afl_persistent_loop). afl-fuzz clears trace_bits before every
+       resume, so each input starts with zero counters. */
+    if (i) raise(SIGSTOP);
+
+    __reset_loop_counters(); /* per-input loop counters start from 0 */
+    (void)target_main(3, args);
+    fflush(NULL);
+  }
+
+  _exit(0);
+}
+
 static void run_forkserver(char *argv0, char *input) {
   uint32_t msg = 1;
   int standalone = !getenv(SHM_ENV_VAR) || write(FORKSRV_FD + 1, &msg, 4) != 4;
 
+  uint32_t    persist_cnt = TRAP_PERSIST_CNT_DEFAULT;
+  const char *pc = getenv("TRAP_PERSIST_CNT");
+  if (pc && atoi(pc) > 0) persist_cnt = (uint32_t)atoi(pc);
+  if (standalone) persist_cnt = 1; /* replay: run the input once */
+
   char  devnull[] = "/dev/null";
   char *args[] = {argv0, input, devnull, NULL};
 
+  pid_t child = -1;
+  int   child_stopped = 0;
+
   for (;;) {
+    uint32_t was_killed = 0;
     if (!standalone) {
-      uint32_t cmd;
-      if (read(FORKSRV_FD, &cmd, 4) != 4) _exit(0); /* afl went away */
+      if (read(FORKSRV_FD, &was_killed, 4) != 4) _exit(0); /* afl went away */
     }
 
-    pid_t child = fork();
-    if (child == 0) {
-      close(FORKSRV_FD); /* don't hold afl's pipes open */
-      close(FORKSRV_FD + 1);
-      __reset_loop_counters();
-      int rc = target_main(3, args);
-      fflush(NULL);
-      _exit(rc);
-    } else if (child < 0) {
-      log_line("could not fork child\n");
-      _exit(1);
+    /* afl-fuzz killed the previous child on a timeout, but it had already
+       stopped itself: write it off (same as AFL++'s forkserver). */
+    if (child_stopped && was_killed) {
+      child_stopped = 0;
+      kill(child, SIGKILL);
+      while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
     }
 
-    /* NEW: tell AFL the child's PID so it can kill it on timeout */
+    if (!child_stopped) {
+      child = fork();
+      if (child == 0) run_child(args, persist_cnt); /* never returns */
+      if (child < 0) {
+        log_line("could not fork child\n");
+        _exit(1);
+      }
+    } else {
+      /* Child alive but paused after its last input: let it run the next. */
+      kill(child, SIGCONT);
+      child_stopped = 0;
+    }
+
+    /* tell AFL the child's PID so it can kill it on timeout */
     if (!standalone) {
       if (write(FORKSRV_FD + 1, &child, 4) != 4) _exit(0);
     }
 
+    /* WUNTRACED: return when the child stops itself (input done), not only
+       when it exits or crashes. */
     int wait_status = 0;
-    while (waitpid(child, &wait_status, 0) < 0) {
+    while (waitpid(child, &wait_status, WUNTRACED) < 0) {
       if (errno != EINTR) {
         log_line("waitpid: %s\n", strerror(errno));
         _exit(1);
       }
     }
+
+    if (WIFSTOPPED(wait_status)) child_stopped = 1;
 
     if (standalone) {
       if (WIFSIGNALED(wait_status))
@@ -275,6 +340,7 @@ static void run_forkserver(char *argv0, char *input) {
                                   : 128 + WTERMSIG(wait_status));
     }
 
+    /* Raw status: afl-fuzz treats "stopped" as a normal end of the run. */
     if (write(FORKSRV_FD + 1, &wait_status, 4) != 4) _exit(0);
   }
 }
@@ -377,8 +443,6 @@ static void collect_traps(void) {
     if (id > max_id) max_id = id;
 
     g_traps[kept++] = (trap_entry){.addr = addr, .id = id, .is_loop = is_loop};
-    // log_line("trap[%zu]: addr=%p id=%u loop=%d\n",
-    //          i, g_traps[i].addr, g_traps[i].id, g_traps[i].is_loop);
   }
   g_trap_count = kept;
 
@@ -390,7 +454,6 @@ static void collect_traps(void) {
         max_id, (unsigned)TRAP_VIRGIN_WORDS);
     exit(EXIT_FAILURE);
   }
-  // log_line("collected %zu trap sites\n", g_trap_count);
 }
 
 int main(int argc, char **argv) {
@@ -401,7 +464,7 @@ int main(int argc, char **argv) {
   }
 
   collect_traps();
-  make_pages_shared();  // <-- add this
+  make_pages_shared();
 
   setup_shm();
   setup_signal();

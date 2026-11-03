@@ -92,11 +92,11 @@ $BIN_PATH/opt \
 echo "Disassembling bitcode to LLVM IR"
 llvm-dis "$wrap/output/out.bc" -o "$wrap/output/out.ll"
 
-# Harness. $wrap/include is AFL++'s include dir, so fuzzer.c gets the same
+# Harness. $wrap/include is AFL++'s include dir, so fuzzer_persistent.c gets the same
 # config.h (TRAP_VIRGIN_WORDS, SHM_ID, MAP_SIZE_TRACE) as afl-fuzz.
 echo "Make target init"
 $BIN_PATH/clang -O2 -funroll-loops -I "$wrap/include" \
-    -c -emit-llvm "$wrap/wrapper/fuzzer.c" -o "$wrap/output/fuzzer.bc"
+    -c -emit-llvm "$wrap/wrapper/fuzzer_persistent.c" -o "$wrap/output/fuzzer_persistent.bc"
 
 echo "Building edge-only binary"
 $BIN_PATH/clang++ "$wrap/trap_instrumentation/EdgeCount.cc" "$wrap/trap_instrumentation/EdgeHandler.cc" \
@@ -115,19 +115,19 @@ echo "Building final binary"
 if [[ "$(uname -s)" == "Darwin" ]]; then
     INCLUDE="-isysroot $(xcrun --show-sdk-path)"
     $BIN_PATH/clang++ $INCLUDE \
-        "$wrap/output/main.transformed.ll" "$wrap/output/fuzzer.bc" \
+        "$wrap/output/main.transformed.ll" "$wrap/output/fuzzer_persistent.bc" \
         -L/opt/homebrew/opt/fontconfig/lib -lfontconfig \
         -o "$wrap/output/main.oracle"
 elif [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
         $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
-            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer.bc" \
+            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer_persistent.bc" \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
             -o "$wrap/output/main.oracle"
     else
         $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
-            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer.bc" \
+            "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer_persistent.bc" \
             -no-pie \
             -o "$wrap/output/main.oracle"
     fi
