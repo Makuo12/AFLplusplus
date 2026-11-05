@@ -1,4 +1,5 @@
 #include "RenameMain.h"
+#include "GlobalPass.h"
 using namespace llvm;
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo()
@@ -16,6 +17,7 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginIn
                     if (Name == "rename")
                     {
                         MPM.addPass(RenameMainPass());
+                        MPM.addPass(CloneGlobalsPass());
                         return true;
                     }
                     return false;

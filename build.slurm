@@ -107,10 +107,35 @@ $BIN_PATH/clang++ "$wrap/trap_instrumentation/EdgeCount.cc" "$wrap/trap_instrume
 
 "$wrap/output/edge" "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
 
-# Final link. -Xclang -disable-llvm-passes: the IR is already -O3 code with
-# the traps placed exactly where the passes put them; only generate code,
-# don't re-optimize (inlining / unrolling could duplicate traps). Same as the
-# de-instrumentation build, so both variants are compiled identically.
+# Runtime sources are compiled as C (-x c) so the --wrap symbols and the
+# __real_* declarations keep plain C names.
+# Runtime sources are compiled as C (-x c) so the --wrap symbols and the
+# __real_* declarations keep plain C names.
+echo "Building closure runtime"
+for f in global filer mem_track; do
+    $BIN_PATH/clang -O2 -funroll-loops -I "$wrap/include" \
+        -c "$wrap/wrapper/$f.c" -o "$wrap/output/$f.o"
+done
+RUNTIME="$wrap/output/global.o $wrap/output/filer.o $wrap/output/mem_track.o"
+
+# File-handle wrappers (filer.c)
+FILE_WRAP_FLAGS="-Wl,--wrap=fopen -Wl,--wrap=fopen64 -Wl,--wrap=freopen -Wl,--wrap=fdopen \
+                 -Wl,--wrap=tmpfile -Wl,--wrap=popen -Wl,--wrap=fclose -Wl,--wrap=pclose"
+
+EXIT_WRAP_FLAGS="-Wl,--wrap=exit -Wl,--wrap=_exit -Wl,--wrap=_Exit"
+
+# Heap wrappers (mem_track.c)
+MEM_WRAP_FLAGS="-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free \
+                -Wl,--wrap=reallocarray -Wl,--wrap=memalign -Wl,--wrap=aligned_alloc \
+                -Wl,--wrap=posix_memalign -Wl,--wrap=valloc -Wl,--wrap=pvalloc \
+                -Wl,--wrap=strdup -Wl,--wrap=strndup \
+                -Wl,--wrap=getline -Wl,--wrap=getdelim"
+
+WRAP_FLAGS="$FILE_WRAP_FLAGS $MEM_WRAP_FLAGS $EXIT_WRAP_FLAGS"
+
+# Closure runtime (globals snapshot, file and heap tracking). Compiled
+# separately with optimization: the final link uses -disable-llvm-passes,
+# which would otherwise leave these C files unoptimized
 echo "Building final binary"
 if [[ "$(uname -s)" == "Darwin" ]]; then
     INCLUDE="-isysroot $(xcrun --show-sdk-path)"
@@ -122,17 +147,29 @@ elif [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
         $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
             "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer_persistent.bc" \
+            $WRAP_FLAGS \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
             -o "$wrap/output/main.oracle"
     else
         $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
             "$wrap/output/main.transformed.ll" $RUNTIME "$wrap/output/fuzzer_persistent.bc" \
+            $WRAP_FLAGS \
             -no-pie \
             -o "$wrap/output/main.oracle"
     fi
 else
     echo "Unknown OS: $(uname -s)"
+    exit 1
+fi
+
+# Fail the build now rather than at fuzzing time.
+if ! objdump -h "$wrap/output/main.oracle" | grep -q "__cls_glob"; then
+    echo "ERROR: no __cls_glob section in main.oracle (globals pass did not run)" >&2
+    exit 1
+fi
+if ! strings "$wrap/output/main.oracle" | grep -q "##SIG_AFL_PERSISTENT##"; then
+    echo "ERROR: persistent-mode marker missing (wrong harness in wrapper/?)" >&2
     exit 1
 fi
 

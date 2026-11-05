@@ -7,6 +7,7 @@
 #include <stdarg.h> /* va_list, used by log_line() in startup.c */
 #include <stdio.h>
 #include <stdlib.h>
+#include <setjmp.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -14,13 +15,27 @@
 #include <sys/ucontext.h>
 #include <unistd.h>
 
+#define uthash_malloc(sz) __real_malloc(sz)
+#define uthash_free(ptr, sz) __real_free(ptr)
+
+#include "uthash.h"
 #include "data.h"
+#include "global.h"
 #include "config.h"
 #ifdef __APPLE__
   #include <mach-o/getsect.h>
   #include <mach-o/dyld.h>
 extern const struct mach_header_64 _mh_execute_header;
 #endif
+
+#define KEEP __attribute__((section("untracer_state")))
+
+/* afl-fuzz scans the target binary for this string (check_binary) and only
+   then runs in persistent mode, i.e. accepts a child that stops itself
+   (SIGSTOP) after each input instead of exiting. __AFL_LOOP embeds the same
+   marker in AFL++-instrumented targets. "used" keeps the optimizer from
+   deleting the otherwise unreferenced variable. */
+static volatile const char *persist_sig __attribute__((used)) = PERSIST_SIG;
 
 #if defined(__linux__)
   #define UC_PC(uc) ((uc)->uc_mcontext.gregs[REG_RIP])
@@ -33,29 +48,26 @@ extern const struct mach_header_64 _mh_execute_header;
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Persistent mode                                                    */
-/* ------------------------------------------------------------------ */
-
-/* afl-fuzz scans the target binary for this string (check_binary) and, if
-   it is there, switches to persistent mode: it then expects a child to stop
-   itself (SIGSTOP) after each input instead of exiting. __AFL_LOOP embeds
-   the same string in AFL++-instrumented targets. "used" keeps the compiler
-   from dropping it. */
-static volatile const char *persist_sig __attribute__((used)) = PERSIST_SIG;
-
-/* Inputs per child before it exits and the forkserver forks a fresh one
-   (like the N in __AFL_LOOP(N)). Bounds state that leaks between inputs.
-   Override with TRAP_PERSIST_CNT. */
-#ifndef TRAP_PERSIST_CNT_DEFAULT
-  #define TRAP_PERSIST_CNT_DEFAULT 5000
-#endif
-
-/* ------------------------------------------------------------------ */
 /* Prototypes for externally-defined symbols                          */
 /* ------------------------------------------------------------------ */
+sigjmp_buf env;
 
+// extern void __reset_loop_counters(void);
 extern int  target_main(int argc, char **argv);
 extern void __reset_loop_counters(void);
+
+static void sig_log(const char *msg, uintptr_t val);
+extern void __real__exit(int) __attribute__((noreturn));
+
+__attribute__((noreturn)) void __wrap_exit(int value) {
+  siglongjmp(env, value ? value : 1);
+}
+__attribute__((noreturn)) void __wrap__exit(int value) {
+  siglongjmp(env, value ? value : 1);
+}
+__attribute__((noreturn)) void __wrap__Exit(int value) {
+  siglongjmp(env, value ? value : 1);
+}
 
 typedef unsigned char u8;
 
@@ -136,7 +148,6 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
     sig_log("addr underflow, base address assumption wrong: ", addr);
     abort();
   }
-
   uintptr_t      resume_addr = 0;
   unsigned char *trap = (unsigned char *)addr;
   int32_t        value = 0, new_value = 0, index_block = 0;
@@ -185,6 +196,10 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
   UC_PC(uc) = resume_addr;
 }
 
+void crash_handler(int sig, siginfo_t *info, void *context) {
+  siglongjmp(env, sig);
+}
+
 void setup_signal(void) {
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
@@ -195,7 +210,6 @@ void setup_signal(void) {
   sa.sa_flags = SA_SIGINFO | SA_NODEFER;
   sigaction(SIGTRAP, &sa, NULL);
 }
-
 /* ------------------------------------------------------------------ */
 /* Shared memory setup                                                */
 /* ------------------------------------------------------------------ */
@@ -208,7 +222,7 @@ static uint32_t *attach_shm(const char *env_name, size_t nwords) {
                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
       log_line("anon mmap failed for %s: %s\n", env_name, strerror(errno));
-      exit(EXIT_FAILURE);
+      __real__exit(EXIT_FAILURE);
     }
     return (uint32_t *)p;
   }
@@ -218,7 +232,7 @@ static uint32_t *attach_shm(const char *env_name, size_t nwords) {
   long  id = strtol(env, &endptr, 10);
   if (errno != 0 || endptr == env || *endptr != '\0' || id < 0) {
     log_line("invalid %s value: %s\n", env_name, env);
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 
   struct shmid_ds ds;
@@ -228,13 +242,13 @@ static uint32_t *attach_shm(const char *env_name, size_t nwords) {
         "%s segment too small (%zu < %zu): fuzzer/harness built with different "
         "config.h?\n",
         env_name, (size_t)ds.shm_segsz, nwords * sizeof(uint32_t));
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 
   void *p = shmat((int)id, NULL, 0);
   if (p == (void *)-1) {
     log_line("shmat error for %s: %s\n", env_name, strerror(errno));
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
   return (uint32_t *)p;
 }
@@ -244,104 +258,119 @@ void setup_shm(void) {
   trace_bits = attach_shm(SHM_ENV_VAR, MAP_SIZE_TRACE);
 }
 
-/* ------------------------------------------------------------------ */
-/* Forkserver, persistent mode (same protocol as AFL++'s              */
-/* __afl_start_forkserver + __afl_persistent_loop, classic SIGSTOP     */
-/* variant)                                                           */
-/* ------------------------------------------------------------------ */
-
-/* The child: runs up to persist_cnt inputs. Between inputs it stops itself;
-   the forkserver sees WIFSTOPPED, reports the run as done, and resumes it
-   with SIGCONT once afl-fuzz has written the next input to the @@ file.
-   After the last input it exits, and the forkserver forks a fresh child. */
-static void run_child(char **args, uint32_t persist_cnt) {
-  close(FORKSRV_FD); /* don't hold afl's pipes open */
-  close(FORKSRV_FD + 1);
-
-  for (uint32_t i = 0; i < persist_cnt; i++) {
-    /* Input i-1 is done: pause until the next one (= raise(SIGSTOP) in
-       __afl_persistent_loop). afl-fuzz clears trace_bits before every
-       resume, so each input starts with zero counters. */
-    if (i) raise(SIGSTOP);
-
-    __reset_loop_counters(); /* per-input loop counters start from 0 */
-    (void)target_main(3, args);
-    fflush(NULL);
-  }
-
-  _exit(0);
-}
-
-static void run_forkserver(char *argv0, char *input) {
+static void run_persistent(char *argv0, char *input) {
   uint32_t msg = 1;
   int standalone = !getenv(SHM_ENV_VAR) || write(FORKSRV_FD + 1, &msg, 4) != 4;
-
-  uint32_t    persist_cnt = TRAP_PERSIST_CNT_DEFAULT;
-  const char *pc = getenv("TRAP_PERSIST_CNT");
-  if (pc && atoi(pc) > 0) persist_cnt = (uint32_t)atoi(pc);
-  if (standalone) persist_cnt = 1; /* replay: run the input once */
 
   char  devnull[] = "/dev/null";
   char *args[] = {argv0, input, devnull, NULL};
 
-  pid_t child = -1;
-  int   child_stopped = 0;
+  int child = -1; /* no persistent child yet */
 
-  for (;;) {
-    uint32_t was_killed = 0;
-    if (!standalone) {
-      if (read(FORKSRV_FD, &was_killed, 4) != 4) _exit(0); /* afl went away */
+  /* Inputs per child before it exits and a fresh one is forked (like the N
+     in __AFL_LOOP(N)). 0 = unlimited: the closure reset (files, heap,
+     globals) is what keeps iterations independent. */
+  uint32_t    persist_cnt = 0;
+  const char *pc = getenv("TRAP_PERSIST_CNT");
+  if (pc && atoi(pc) > 0) persist_cnt = (uint32_t)atoi(pc);
+
+  if (standalone) {
+    /* No forkserver protocol: just run the target once and exit,
+       same as your original standalone branch. */
+    child = fork();
+    if (child == 0) {
+      __reset_loop_counters();
+      int rc = 0;
+      if (sigsetjmp(env, 1) == 0) rc = target_main(3, args);
+      fflush(NULL);
+      __real__exit(rc);
     }
-
-    /* afl-fuzz killed the previous child on a timeout, but it had already
-       stopped itself: write it off (same as AFL++'s forkserver). */
-    if (child_stopped && was_killed) {
-      child_stopped = 0;
-      kill(child, SIGKILL);
-      while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
-    }
-
-    if (!child_stopped) {
-      child = fork();
-      if (child == 0) run_child(args, persist_cnt); /* never returns */
-      if (child < 0) {
-        log_line("could not fork child\n");
-        _exit(1);
-      }
-    } else {
-      /* Child alive but paused after its last input: let it run the next. */
-      kill(child, SIGCONT);
-      child_stopped = 0;
-    }
-
-    /* tell AFL the child's PID so it can kill it on timeout */
-    if (!standalone) {
-      if (write(FORKSRV_FD + 1, &child, 4) != 4) _exit(0);
-    }
-
-    /* WUNTRACED: return when the child stops itself (input done), not only
-       when it exits or crashes. */
     int wait_status = 0;
-    while (waitpid(child, &wait_status, WUNTRACED) < 0) {
+    while (waitpid(child, &wait_status, 0) < 0) {
       if (errno != EINTR) {
         log_line("waitpid: %s\n", strerror(errno));
-        _exit(1);
+        __real__exit(1);
+      }
+    }
+    if (WIFSIGNALED(wait_status))
+      log_line("child killed by signal %d\n", WTERMSIG(wait_status));
+    log_line("new edges=%u new loop buckets=%u\n", trace_bits[0],
+             trace_bits[3]);
+    __real__exit(WIFEXITED(wait_status) ? WEXITSTATUS(wait_status)
+                                        : 128 + WTERMSIG(wait_status));
+  }
+
+  /* Forkserver loop: the PARENT talks to afl-fuzz. The child is the
+     persistent process that loops internally and stops itself. */
+  for (;;) {
+    uint32_t cmd;
+    if (read(FORKSRV_FD, &cmd, 4) != 4) __real__exit(0); /* afl went away */
+
+    uint32_t prev_timed_out = cmd; /* afl tells us if the last run timed out */
+
+    if (child == -1 || prev_timed_out) {
+      /* No usable child: spawn a fresh persistent process. */
+      if (child != -1) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+      }
+      child = fork();
+      if (child == 0) {
+        /* Persistent child: close afl's pipes, it doesn't need them. */
+        close(FORKSRV_FD);
+        close(FORKSRV_FD + 1);
+
+        uint32_t iter = 0;
+        for (;;) {
+          int sig = sigsetjmp(env, 1);
+          if (sig == 0) {
+            optind = 0; /* glibc: also reinitializes getopt's internal state */
+            __reset_loop_counters();
+            int rc = target_main(3, args);
+            (void)rc;
+          }
+          fflush(NULL);
+          /* Stop myself; parent resumes me with SIGCONT for the
+          next test case, or kills+replaces me on timeout. */
+          close_open_file_handles();
+          free_open_heap();
+          if (__untracer_restore_global()) {
+            log_line("__untracer_restore_global failed to clean\n");
+            __real__exit(EXIT_FAILURE);
+          }
+          /* Iteration cap reached: exit normally; the forkserver
+             reports the exit as this input's result and forks a
+             fresh child for the next one. */
+          if (persist_cnt && ++iter >= persist_cnt) __real__exit(0);
+          raise(SIGSTOP);
+        }
+      }
+    } else {
+      /* Reuse the existing stopped child. */
+      kill(child, SIGCONT);
+    }
+
+    /* Tell afl-fuzz the PID to watch/kill on timeout. */
+    if (write(FORKSRV_FD + 1, &child, 4) != 4) __real__exit(0);
+
+    /* Wait for the child to stop (iteration done) or die (crash/killed). */
+    int   wait_status = 0;
+    pid_t w;
+    while ((w = waitpid(child, &wait_status, WUNTRACED)) < 0) {
+      if (errno != EINTR) {
+        log_line("waitpid: %s\n", strerror(errno));
+        __real__exit(1);
       }
     }
 
-    if (WIFSTOPPED(wait_status)) child_stopped = 1;
-
-    if (standalone) {
-      if (WIFSIGNALED(wait_status))
-        log_line("child killed by signal %d\n", WTERMSIG(wait_status));
-      log_line("new edges=%u new loop buckets=%u\n", trace_bits[0],
-               trace_bits[3]);
-      exit(WIFEXITED(wait_status) ? WEXITSTATUS(wait_status)
-                                  : 128 + WTERMSIG(wait_status));
+    if (WIFSTOPPED(wait_status)) {
+      /* Normal end of one loop iteration. */
+      if (write(FORKSRV_FD + 1, &wait_status, 4) != 4) __real__exit(0);
+    } else {
+      /* Child exited or was killed (crash, timeout, loop-count exit). */
+      if (write(FORKSRV_FD + 1, &wait_status, 4) != 4) __real__exit(0);
+      child = -1; /* force a fresh fork next iteration */
     }
-
-    /* Raw status: afl-fuzz treats "stopped" as a normal end of the run. */
-    if (write(FORKSRV_FD + 1, &wait_status, 4) != 4) _exit(0);
   }
 }
 
@@ -371,8 +400,7 @@ static void make_pages_shared(void) {
   // All traps live in the target's .text, which is one contiguous mapping.
   // Remap the whole range [first trap page, last trap page] as ONE shared
   // mapping instead of one mapping per page: fork() copies every mapping
-  // of the process, so thousands of per-page mappings made every execution
-  // pay milliseconds just to fork.
+  // of the process, so thousands of per-page mappings made every fork slow.
   uintptr_t lo = UINTPTR_MAX, hi = 0;
   for (size_t i = 0; i < g_trap_count; i++) {
     uintptr_t addr = (uintptr_t)g_traps[i].addr;
@@ -388,13 +416,13 @@ static void make_pages_shared(void) {
   int fd = memfd_create("text_shared", 0);
   if (fd < 0) {
     log_line("memfd_create failed: %s\n", strerror(errno));
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 
   if (ftruncate(fd, len) != 0) {
     log_line("ftruncate(%zu) failed: %s\n", len, strerror(errno));
     close(fd);
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 
   size_t done = 0;
@@ -404,7 +432,7 @@ static void make_pages_shared(void) {
       log_line("short write copying text %p (%zu/%zu): %s\n", (void *)base,
                done, len, strerror(errno));
       close(fd);
-      exit(EXIT_FAILURE);
+      __real__exit(EXIT_FAILURE);
     }
     done += (size_t)w;
   }
@@ -416,7 +444,7 @@ static void make_pages_shared(void) {
   if (r == MAP_FAILED) {
     log_line("mmap MAP_FIXED failed for %p (+%zu): %s\n", (void *)base, len,
              strerror(errno));
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 }
 
@@ -425,7 +453,7 @@ static void collect_traps(void) {
   g_traps = malloc(n * sizeof(trap_entry));
   if (!g_traps) {
     log_line("collect_traps: oom\n");
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
 
   size_t   kept = 0;
@@ -443,6 +471,8 @@ static void collect_traps(void) {
     if (id > max_id) max_id = id;
 
     g_traps[kept++] = (trap_entry){.addr = addr, .id = id, .is_loop = is_loop};
+    // log_line("trap[%zu]: addr=%p id=%u loop=%d\n",
+    //          i, g_traps[i].addr, g_traps[i].id, g_traps[i].is_loop);
   }
   g_trap_count = kept;
 
@@ -452,22 +482,31 @@ static void collect_traps(void) {
         "raise TRAP_VIRGIN_WORDS in AFL++ config.h, then rebuild "
         "afl-fuzz and the harness\n",
         max_id, (unsigned)TRAP_VIRGIN_WORDS);
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
+  // log_line("collected %zu trap sites\n", g_trap_count);
 }
 
 int main(int argc, char **argv) {
   init_log_path();
   if (argc < 2) {
     log_line("usage: harness <input_file>\n");
-    exit(EXIT_FAILURE);
+    __real__exit(EXIT_FAILURE);
   }
-
   collect_traps();
   make_pages_shared();
 
   setup_shm();
   setup_signal();
-  run_forkserver(argv[0], argv[1]);
+
+  if (__untracer_setup_global()) {
+    log_line("failed to setup globals \n");
+    __real__exit(EXIT_FAILURE);
+  }
+
+  __untracer_snapshot_fds();  // missing
+  __untracer_heap_start();    // missing
+
+  run_persistent(argv[0], argv[1]);
   return 0;
 }
