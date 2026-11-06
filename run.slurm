@@ -58,6 +58,7 @@ if [[ "${1:-}" = "arc" ]]; then
     tmp_base="${TMPDIR:-/tmp}"
 else
     # run on my local linux machine
+    unset AFL_NO_AFFINITY                 # let afl-fuzz bind itself to a free core
     wrap=$(pwd)
     AFLPP="$wrap"                         # patched AFL++ directory
 
