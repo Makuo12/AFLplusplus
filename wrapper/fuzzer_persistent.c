@@ -333,7 +333,10 @@ static void run_persistent(char *argv0, char *input) {
           /* Stop myself; parent resumes me with SIGCONT for the
           next test case, or kills+replaces me on timeout. */
           close_open_file_handles();
-          free_open_heap();
+          int freed = free_open_heap();
+          if (freed > 0) {
+            log_line("freed %d heap objects\n", freed);
+          }
           if (__untracer_restore_global()) {
             log_line("__untracer_restore_global failed to clean\n");
             __real__exit(EXIT_FAILURE);

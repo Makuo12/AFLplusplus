@@ -23,7 +23,7 @@ extern "C"
     /* mem_track.c: heap tracking. Allocations before __untracer_heap_start()
      * are baseline and never freed. */
     void __untracer_heap_start(void);
-    void free_open_heap(void);
+    int free_open_heap(void);
 
     /* Real allocator entry points, resolved by -Wl,--wrap=malloc/free.
      * Runtime code that must NOT be tracked (tables that survive resets)

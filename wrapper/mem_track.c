@@ -310,9 +310,10 @@ void __untracer_heap_start(void)
 
 /* Call after close_open_file_handles() (streams may use tracked setvbuf
  * buffers) and before __untracer_restore_global(). */
-void free_open_heap(void)
+int free_open_heap(void)
 {
     heap_obj *s, *tmp;
+    int count = 0;
     HASH_ITER(hh, heap_map, s, tmp)
     {
         if (s == &heap_sentinel)
@@ -320,6 +321,8 @@ void free_open_heap(void)
         HASH_DEL(heap_map, s);
         __real_free(s->p);
         node_release(s);
+        count++;
     }
     heap_live = 0;
+    return count;
 }
