@@ -334,9 +334,9 @@ static void run_persistent(char *argv0, char *input) {
           next test case, or kills+replaces me on timeout. */
           close_open_file_handles();
           int freed = free_open_heap();
-          if (freed > 0) {
-            log_line("freed %d heap objects\n", freed);
-          }
+          // if (freed > 0) {
+          //   log_line("freed %d heap objects\n", freed);
+          // }
           if (__untracer_restore_global()) {
             log_line("__untracer_restore_global failed to clean\n");
             __real__exit(EXIT_FAILURE);

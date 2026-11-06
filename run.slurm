@@ -27,6 +27,7 @@ export AFL_NO_AFFINITY=1
 
 export AFL_FAST_CAL=1                   # 3 calibration runs (1 warm-up + 2 timed) instead of 7
 export AFL_NO_SYNC=1                    # don't import other instances' inputs
+export TRAP_PERSIST_CNT=1000000 
 # Trimming, frameshift, deterministic stages and CmpLog are turned off by
 # AFL_TRAP_MODE automatically; no need to set AFL_DISABLE_TRIM.
 
