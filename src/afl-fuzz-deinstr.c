@@ -22,6 +22,9 @@
      DE_EDGE_ARC          set: link with bfd + --image-base (cluster build)
      DE_CLANGXX           compiler for the relink (default clang++)
      BASE_ADDRESS         image base for DE_EDGE_ARC (default 0x400000)
+     DE_LINK_EXTRA        extra arguments for the relink, space separated
+                          (e.g. the persistent closure runtime objects and
+                          its -Wl,--wrap=... flags); must match the build
 
    Only active in trap mode. If anything is missing, it is disabled with a
    warning and fuzzing continues normally.
@@ -31,12 +34,15 @@
 #include "afl-fuzz.h"
 #include <sys/wait.h>
 
-static u32 de_edge_count;      /* new edges since last de-instrumentation  */
-static u32 de_edge_loop_count; /* new loop buckets since last rebuild      */
-static u32 de_edge_max = 4000; /* DE_EDGE_MAX env                          */
-static u8  de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
-static u8  de_enabled;         /* config validated at startup              */
-static u8 *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base;
+static u32   de_edge_count;      /* new edges since last de-instrumentation  */
+static u32   de_edge_loop_count; /* new loop buckets since last rebuild      */
+static u32   de_edge_max = 4000; /* DE_EDGE_MAX env                          */
+static u8    de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
+static u8    de_enabled;         /* config validated at startup              */
+static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base;
+static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
+static char *de_extra_argv[96];
+static int   de_extra_argc;
 
 /* Run a command and wait for it. 0 on success. */
 
@@ -85,6 +91,24 @@ void deinstr_setup(afl_state_t *afl) {
   de_clangxx = getenv("DE_CLANGXX");
   de_base = getenv("BASE_ADDRESS");
   if (!de_clangxx) { de_clangxx = "clang++"; }
+
+  /* Split DE_LINK_EXTRA into separate arguments once, at startup. */
+  if (getenv("DE_LINK_EXTRA")) {
+    de_link_extra = (u8 *)ck_strdup((u8 *)getenv("DE_LINK_EXTRA"));
+    char *save = NULL;
+    for (char *tok = strtok_r((char *)de_link_extra, " \t\n", &save); tok;
+         tok = strtok_r(NULL, " \t\n", &save)) {
+      if (de_extra_argc >=
+          (int)(sizeof(de_extra_argv) / sizeof(*de_extra_argv))) {
+        WARNF(
+            "DE_LINK_EXTRA has too many arguments - de-instrumentation "
+            "DISABLED.");
+        return;
+      }
+
+      de_extra_argv[de_extra_argc++] = tok;
+    }
+  }
   if (!de_base) { de_base = "0x400000"; }
 
   if (!de_out_home || !de_meta || !de_thr) {
@@ -106,7 +130,8 @@ void deinstr_setup(afl_state_t *afl) {
   }
 
   de_enabled = 1;
-  OKF("De-instrumentation enabled (threshold %u edges).", de_edge_max);
+  OKF("De-instrumentation enabled (threshold %u edges, %d extra link args).",
+      de_edge_max, de_extra_argc);
 }
 
 /* Called from fuzz_run_target() after EVERY execution (fuzzing,
@@ -145,7 +170,7 @@ static int remove_instrumentation(afl_state_t *afl) {
                     (char *)de_meta,         "-o", (char *)new_ll, "-l",
                     (char *)de_thr,          NULL};
 
-  char *stage2[32];
+  char *stage2[160];
   int   n = 0;
   stage2[n++] = (char *)de_clangxx;
   stage2[n++] = "-O3";
@@ -155,10 +180,16 @@ static int remove_instrumentation(afl_state_t *afl) {
   stage2[n++] = "-fomit-frame-pointer";
   stage2[n++] = "-fno-semantic-interposition";
   stage2[n++] = "-fvisibility=hidden";
+  /* Same as the build's final link: the IR is already optimized and
+     instrumented, only generate code (no re-optimization, no duplicated
+     traps). */
   stage2[n++] = "-Xclang";
   stage2[n++] = "-disable-llvm-passes";
   stage2[n++] = (char *)new_ll;
   stage2[n++] = (char *)fuzz_bc;
+  for (int k = 0; k < de_extra_argc; k++) {
+    stage2[n++] = de_extra_argv[k];
+  }
   stage2[n++] = "-no-pie";
   if (de_arc) {
     stage2[n++] = "-fuse-ld=bfd";

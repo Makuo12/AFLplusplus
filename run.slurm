@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=de_forkserver_run
+#SBATCH --job-name=de_single_run
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --time=25:30:00
@@ -10,6 +10,8 @@
 #SBATCH --output=./logs/fuzz-%j.log
 #SBATCH --error=./logs/fuzz-%j.log
 #SBATCH --array=1-5
+
+# Trap-mode AFL++ WITH de-instrumentation, persistent closure harness.
 
 set -euo pipefail
 
@@ -28,9 +30,11 @@ export AFL_NO_SYNC=1                    # don't import other instances' inputs
 # Trimming, frameshift, deterministic stages and CmpLog are turned off by
 # AFL_TRAP_MODE automatically; no need to set AFL_DISABLE_TRIM.
 
+export TRAP_PERSIST_CNT=1000000 
+
 FUZZ_SECONDS=$((24*60*60))
 ORACLE="main.oracle"
-PROGRAM="de_forkserver_aflpp"
+PROGRAM="de_single_aflpp"
 
 
 if [[ "${1:-}" = "arc" ]]; then
@@ -39,21 +43,22 @@ if [[ "${1:-}" = "arc" ]]; then
     ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
     FULL_ID="${PROGRAM}_${ID}"
 
-    wrap="$HOME/de_forkserver/AFLplusplus"         # same as build
-    AFLPP="$wrap"           # <-- your patched AFL++ directory
-    runner="$wrap/de_forkserver_runner"
+    wrap="$HOME/de_single/AFLplusplus"  # same as build
+    AFLPP="$wrap"                       # patched AFL++ directory
+    runner="$wrap/de_single_runner"
     mkdir -p "$runner"
 
     output="$runner/output_${ID}"       # per-task copy
     rm -rf "$output"
     mkdir -p "$output"
-    cp -r "$wrap/output/." "$output/"   # everything: binaries, .bc, .ll, ...
+    cp -r "$wrap/output/." "$output/"   # everything: binaries, .bc, .ll, .o, ...
 
     tmp_base="${TMPDIR:-/tmp}"
 else
     # run on my local linux machine
+    unset AFL_NO_AFFINITY               # let afl-fuzz bind itself to a free core
     wrap=$(pwd)
-    AFLPP="$wrap"           # <-- your patched AFL++ directory
+    AFLPP="$wrap"                       # patched AFL++ directory
 
     ID="local_$(date +%s)_$$"
     FULL_ID="${PROGRAM}_${ID}"
@@ -67,14 +72,13 @@ fi
 
 # --- de-instrumentation ----------------------------------------------------
 # Harness-written files (REQUIRED by the harness, it exits if unset).
-# Kept next to the AFL++ output dir, like LOG_FILE.
 export META_DATA_FILE="$tmp_base/${FULL_ID}_meta_data.txt"
 export LOOP_THRESHOLD_FILE="$tmp_base/${FULL_ID}_loop_threshold.txt"
 : > "$META_DATA_FILE"                   # start each run with empty files
 : > "$LOOP_THRESHOLD_FILE"
 
-# Rebuild inputs: remove_edge, main.transformed.ll, fuzzer.bc. Must be the
-# per-task copy: the rebuild rewrites main.transformed.ll and main.oracle.
+# Rebuild inputs: remove_edge, main.transformed.ll, fuzzer.bc and the closure
+# runtime objects. Must be the per-task copy: rebuilds rewrite it.
 export OUTPUT_HOME="$output"
 export DE_EDGE_MAX=4000
 export DE_CLANGXX="$(llvm-config --bindir)/clang++"   # same clang as the build
@@ -83,7 +87,18 @@ if [[ "${1:-}" = "arc" ]]; then
     export DE_EDGE_ARC=1                # bfd + --image-base, like the arc build
 fi
 
-tmp_input="$tmp_base/de_forkserver_${FULL_ID}"
+# Extra relink arguments: the closure runtime and the same --wrap flags as
+# WRAP_FLAGS in de_single_build.sh (they must stay identical).
+export DE_LINK_EXTRA="$output/global.o $output/filer.o $output/mem_track.o \
+ -Wl,--wrap=fopen -Wl,--wrap=fopen64 -Wl,--wrap=freopen -Wl,--wrap=fdopen \
+ -Wl,--wrap=tmpfile -Wl,--wrap=popen -Wl,--wrap=fclose -Wl,--wrap=pclose \
+ -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free \
+ -Wl,--wrap=reallocarray -Wl,--wrap=memalign -Wl,--wrap=aligned_alloc \
+ -Wl,--wrap=posix_memalign -Wl,--wrap=valloc -Wl,--wrap=pvalloc \
+ -Wl,--wrap=strdup -Wl,--wrap=strndup -Wl,--wrap=getline -Wl,--wrap=getdelim \
+ -Wl,--wrap=exit -Wl,--wrap=_exit -Wl,--wrap=_Exit"
+
+tmp_input="$tmp_base/de_single_${FULL_ID}"
 OUTROOT="$tmp_base/$FULL_ID"            # node-local fuzzer output
 RESULTS_DIR="$output/results"           # persistent results
 SUT_ORACLE="$output/$ORACLE"
@@ -101,6 +116,11 @@ AFL_FUZZ="$AFLPP/afl-fuzz"
 [ -d "$SEED_DIR" ]   || { echo "Missing seed dir: $SEED_DIR" >&2; exit 1; }
 [ -x "$SUT_ORACLE" ] || { echo "Missing oracle: $SUT_ORACLE" >&2; exit 1; }
 [ -x "$AFL_FUZZ" ]   || { echo "Missing afl-fuzz: $AFL_FUZZ" >&2; exit 1; }
+grep -qa '##SIG_AFL_PERSISTENT##' "$SUT_ORACLE" \
+    || { echo "Not a persistent-mode binary: $SUT_ORACLE" >&2; exit 1; }
+for f in global.o filer.o mem_track.o remove_edge fuzzer.bc main.transformed.ll; do
+    [ -f "$output/$f" ] || { echo "Missing rebuild input: $output/$f" >&2; exit 1; }
+done
 
 # -z : no deterministic stages (in this AFL++ -d is deprecated and ignored)
 rc=0

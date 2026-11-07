@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=de_forkserver_build
+#SBATCH --job-name=de_single_build
 #SBATCH --partition=normal_q
 #SBATCH --account=fuzzing
 #SBATCH --constraint=amd
@@ -10,6 +10,10 @@
 #SBATCH --output=./logs/build-%j.log
 #SBATCH --error=./logs/build-%j.log
 
+# Trap-mode AFL++ WITH de-instrumentation, persistent closure harness
+# (wrapper/fuzzer_de_single.c + global.c, filer.c, mem_track.c).
+# $wrap is the patched AFL++ checkout; the run script copies $wrap/output.
+
 set -e
 
 if [ "${1:-}" = "arc" ]; then
@@ -18,16 +22,18 @@ if [ "${1:-}" = "arc" ]; then
     module load GCCcore/14.3.0
     pip install --user wllvm
     export PATH="$HOME/.local/bin:$PATH"
-    wrap="$HOME/de_forkserver/AFLplusplus"
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
+    wrap="$HOME/de_single/AFLplusplus"
 else
-    export LLVM_CC_NAME=clang-20        # ← pin to version 20
-    export LLVM_CXX_NAME=clang++-20     # ← pin to version 20
-    wrap=$(pwd)
-    echo "Building afl-fuzz (AFL++ with trap mode)"
-    make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
+    export LLVM_CC_NAME=clang-20          # pin to version 20
+    export LLVM_CXX_NAME=clang++-20       # pin to version 20
+    wrap=$(pwd)                           # run from the AFL++ checkout
 fi
+
+echo "Building afl-fuzz (AFL++ with trap mode)"
+# Remove objects from earlier builds: -flto object files only link with the
+# same GCC version that created them (GCC 11 objects + GCC 14 link = error).
+rm -f "$wrap"/src/*.o "$wrap"/afl-fuzz
+make -C "$wrap" afl-fuzz NO_PYTHON=1 NO_NYX=1
 
 export BASE_ADDRESS=0x400000
 
@@ -37,19 +43,16 @@ LIB_PATH="$(llvm-config --libdir)"
 BIN_PATH="$(llvm-config --bindir)"
 export LLVM_COMPILER=clang
 
-rm -rf $wrap/output
-mkdir -p $wrap/output
+rm -rf "$wrap/output"
+mkdir -p "$wrap/output"
 
 echo "Building llvm passes"
-rm -rf $wrap/build
+rm -rf "$wrap/build"
 
-cmake -B $wrap/build \
-      -DLLVM_DIR=$LIB_PATH/cmake/llvm \
+cmake -B "$wrap/build" \
+      -DLLVM_DIR="$LIB_PATH/cmake/llvm" \
       -DCMAKE_BUILD_TYPE=Release 2>&1 | cat
-make -C $wrap/build -j$(nproc)
-
-
-echo "Building utils"
+make -C "$wrap/build" -j"$(nproc)"
 
 echo "Building xpdf with custom coverage tracer..."
 SRC="$wrap/targets/xpdf-4.06_2"
@@ -79,61 +82,94 @@ cmake -S "$SRC" -B "$BUILD" \
 cmake --build "$BUILD" -j"$(nproc)"
 
 echo "Extract whole-program bitcode from the final binary"
-extract-bc $BUILD/xpdf/pdftotext -o $wrap/output/whole_program.bc
+extract-bc "$BUILD/xpdf/pdftotext" -o "$wrap/output/whole_program.bc"
 
-echo "Currently at $(pwd)"
+# "rename" runs RenameMainPass and CloneGlobalsPass (globals -> __cls_glob).
 $BIN_PATH/opt \
-    -load-pass-plugin=$wrap/build/Untracer.so \
+    -load-pass-plugin="$wrap/build/Untracer.so" \
     -passes="rename" \
-    $wrap/output/whole_program.bc -o $wrap/output/out.bc
+    "$wrap/output/whole_program.bc" -o "$wrap/output/out.bc"
 
 echo "Disassembling bitcode to LLVM IR"
-llvm-dis $wrap/output/out.bc -o $wrap/output/out.ll
+llvm-dis "$wrap/output/out.bc" -o "$wrap/output/out.ll"
 
+# Harness. Must be called fuzzer.bc: de-instrumentation relinks with it.
+# $wrap/include is AFL++'s include dir, so it gets the same config.h
+# (TRAP_VIRGIN_WORDS, SHM_ID, MAP_SIZE_TRACE, PERSIST_SIG) as afl-fuzz.
 echo "Make target init"
-    $BIN_PATH/clang -O2 -I $wrap/include \
-    -c -emit-llvm $wrap/wrapper/fuzzer.c -o $wrap/output/fuzzer.bc
+$BIN_PATH/clang -O2 -funroll-loops -I "$wrap/include" \
+    -c -emit-llvm "$wrap/wrapper/fuzzer_persistent.c" -o "$wrap/output/fuzzer.bc"
 
 echo "Building edge-only binary"
-$BIN_PATH/clang++ $wrap/trap_instrumentation/EdgeCount.cc $wrap/trap_instrumentation/EdgeHandler.cc \
-    $wrap/trap_instrumentation/PCTable.cc $wrap/trap_instrumentation/Instrumentation.cc   \
-    -I include -o $wrap/output/edge \
+$BIN_PATH/clang++ "$wrap/trap_instrumentation/EdgeCount.cc" "$wrap/trap_instrumentation/EdgeHandler.cc" \
+    "$wrap/trap_instrumentation/PCTable.cc" "$wrap/trap_instrumentation/Instrumentation.cc" \
+    -I "$wrap/include" -o "$wrap/output/edge" \
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
 
 echo "Building de-instrumentation tool"
-$BIN_PATH/clang++ $wrap/trap_instrumentation/DeIntrumentation.cc \
-    -I include -o $wrap/output/remove_edge \
+$BIN_PATH/clang++ "$wrap/trap_instrumentation/DeIntrumentation.cc" \
+    -I "$wrap/include" -o "$wrap/output/remove_edge" \
     $(llvm-config --cxxflags --ldflags --libs core irreader analysis) \
     $(llvm-config --system-libs) $PERF_FLAGS
 
-$wrap/output/edge "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
+"$wrap/output/edge" "$wrap/output/out.ll" "$wrap/output/main.transformed.ll"
 
+# Closure runtime (globals snapshot, file and heap tracking). Compiled
+# separately with optimization: the final link uses -disable-llvm-passes,
+# which would otherwise leave these C files unoptimized. The objects stay in
+# output/: de-instrumentation relinks with them (DE_LINK_EXTRA).
+echo "Building closure runtime"
+for f in global filer mem_track; do
+    $BIN_PATH/clang -O2 -funroll-loops -I "$wrap/include" \
+        -c "$wrap/wrapper/$f.c" -o "$wrap/output/$f.o"
+done
+RUNTIME="$wrap/output/global.o $wrap/output/filer.o $wrap/output/mem_track.o"
+
+# Must be identical to DE_LINK_EXTRA's flags in the run script.
+WRAP_FLAGS="-Wl,--wrap=fopen -Wl,--wrap=fopen64 -Wl,--wrap=freopen -Wl,--wrap=fdopen \
+ -Wl,--wrap=tmpfile -Wl,--wrap=popen -Wl,--wrap=fclose -Wl,--wrap=pclose \
+ -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free \
+ -Wl,--wrap=reallocarray -Wl,--wrap=memalign -Wl,--wrap=aligned_alloc \
+ -Wl,--wrap=posix_memalign -Wl,--wrap=valloc -Wl,--wrap=pvalloc \
+ -Wl,--wrap=strdup -Wl,--wrap=strndup -Wl,--wrap=getline -Wl,--wrap=getdelim \
+ -Wl,--wrap=exit -Wl,--wrap=_exit -Wl,--wrap=_Exit"
+
+# Final link. -Xclang -disable-llvm-passes: only generate code from the
+# already optimized, instrumented IR. The de-instrumentation relink uses the
+# same flags.
 echo "Building final binary"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    INCLUDE="-isysroot $(xcrun --show-sdk-path)"
-    $BIN_PATH/clang++  $INCLUDE  \
-        $wrap/output/main.transformed.ll $wrap/output/fuzzer.bc \
-        -L/opt/homebrew/opt/fontconfig/lib -lfontconfig \
-        -o $wrap/output/main.oracle
-elif [[ "$(uname -s)" == "Linux" ]]; then
+if [[ "$(uname -s)" == "Linux" ]]; then
     if [[ "${1:-}" = arc ]]; then
-    # -Xclang -disable-llvm-passes you can add this later for testing
-        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
-            $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
+            "$wrap/output/main.transformed.ll" "$wrap/output/fuzzer.bc" $RUNTIME \
+            $WRAP_FLAGS \
             -no-pie -fuse-ld=bfd \
             -Wl,--image-base=$BASE_ADDRESS -Wl,-z,noseparate-code \
-            -o $wrap/output/main.oracle
+            -o "$wrap/output/main.oracle"
     else
-        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I $wrap/include \
-            $wrap/output/main.transformed.ll $RUNTIME $wrap/output/fuzzer.bc \
+        $BIN_PATH/clang++ $PERF_FLAGS -Xclang -disable-llvm-passes -I "$wrap/include" \
+            "$wrap/output/main.transformed.ll" "$wrap/output/fuzzer.bc" $RUNTIME \
+            $WRAP_FLAGS \
             -no-pie \
-            -o $wrap/output/main.oracle
+            -o "$wrap/output/main.oracle"
     fi
-    cp  $wrap/output/main.oracle $wrap/output/main.trace           # This is just a dummy file to satisfy the fuzzer's expectations. The actual tracing is done by the instrumentation pass.
 else
-    echo "Unknown OS: $(uname -s)"
+    echo "Unsupported OS: $(uname -s) (Linux only)"
     exit 1
 fi
+
+# Fail the build now rather than at fuzzing time.
+if ! objdump -h "$wrap/output/main.oracle" | grep -q "__cls_glob"; then
+    echo "ERROR: no __cls_glob section in main.oracle (globals pass did not run)" >&2
+    exit 1
+fi
+if ! grep -qa "##SIG_AFL_PERSISTENT##" "$wrap/output/main.oracle"; then
+    echo "ERROR: persistent-mode marker missing (wrong harness in wrapper/?)" >&2
+    exit 1
+fi
+for f in remove_edge main.transformed.ll fuzzer.bc global.o filer.o mem_track.o; do
+    [ -f "$wrap/output/$f" ] || { echo "ERROR: output/$f missing (needed for rebuilds)" >&2; exit 1; }
+done
 
 echo "Done with build"
