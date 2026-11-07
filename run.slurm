@@ -9,7 +9,7 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --output=./logs/fuzz-%j.log
 #SBATCH --error=./logs/fuzz-%j.log
-#SBATCH --array=1-5
+#SBATCH --array=1
 
 # Trap-mode AFL++ WITH de-instrumentation, persistent closure harness.
 
