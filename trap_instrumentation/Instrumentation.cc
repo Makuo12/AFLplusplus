@@ -49,7 +49,7 @@ void processBlocks(Module &M, SmallPtrSet<BasicBlock *, 16> &seen)
         // Handle PCTable
     }
     assert(slot == N && "loop count and loop instrumentation disagree");
-    errs() << "meta_id count" << " " << wholeCount;
+    errs() << "meta_id count" << " " << wholeCount << "\n";
 }
 
 
@@ -89,7 +89,7 @@ void countBranches(Module &M) {
     map<string, BlockInfo> blocks;
     for (Function &F: M) {
         int globalCount = 0;
-        if (F.isDeclaration()) return;
+        if (F.isDeclaration()) continue;
         for (BasicBlock &BB : llvm::make_early_inc_range(F)) {
             Instruction *TI = BB.getTerminator();
             switch (TI->getOpcode()) {
