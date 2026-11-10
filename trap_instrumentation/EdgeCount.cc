@@ -48,7 +48,6 @@ Function *getOrCreateResetFn(Module &M)
 // non-static: used from Instrumentation.cc and EdgeCount.cc
 bool shouldProcessFunction(Function &F) {
   if (F.isDeclaration()) return false;
-  if (F.hasFnAttribute(Attribute::NoSanitizeCoverage)) return false;
 
   StringRef N = F.getName();
   if (N == "main" || N == kResetFnName) return false;
