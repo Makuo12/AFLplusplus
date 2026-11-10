@@ -49,7 +49,7 @@ void processBlocks(Module &M, SmallPtrSet<BasicBlock *, 16> &seen)
         // Handle PCTable
     }
     assert(slot == N && "loop count and loop instrumentation disagree");
-
+    errs() << "meta_id count" << " " << wholeCount;
 }
 
 
