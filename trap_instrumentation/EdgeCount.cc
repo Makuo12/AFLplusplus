@@ -45,16 +45,21 @@ Function *getOrCreateResetFn(Module &M)
 // instrumentation, block instrumentation). The loop count and the loop
 // instrumentation must agree on which functions are visited, so this can't
 // be duplicated inline.
-bool shouldProcessFunction(Function &F)
-{
-    if (F.isDeclaration())
-        return false;
-    StringRef Name = F.getName();
-    if (Name == "main" || Name == kResetFnName || foundInSkipFunctions(Name))
-        return false;
-    if (Name.find("llvm.") != StringRef::npos)
-        return false; // skip LLVM intrinsics
-    return true;
+// non-static: used from Instrumentation.cc and EdgeCount.cc
+bool shouldProcessFunction(Function &F) {
+  if (F.isDeclaration()) return false;
+  if (F.hasFnAttribute(Attribute::NoSanitizeCoverage)) return false;
+
+  StringRef N = F.getName();
+  if (N == "main" || N == kResetFnName) return false;
+
+  // Your runtime + linker wrappers (prefix match only)
+  if (N.starts_with("__untracer") || N.starts_with("__runtime") ||
+      N.starts_with("__wrap_") || N.starts_with("__real_") ||
+      N == "__clang_call_terminate")
+    return false;
+
+  return true;
 }
 
 // Body: one memset over the whole counter array.

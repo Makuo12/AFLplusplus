@@ -14,7 +14,6 @@ void handleInvokeEdges(Instruction &TI, int &invokeAddedCount, SmallPtrSet<Basic
 void handleIfEdges(Instruction &TI, int &count, SmallPtrSet<BasicBlock *, 16> &seen);
 void countCriticalEdge(Instruction &TI, int &globalCount, int &criticalEdgeCount);
 void insertCounterGuard(BasicBlock *HeaderBB, GlobalVariable *CounterArr, unsigned slot, int &count);
-bool foundInSkipFunctions(StringRef fName);
 Function *getOrCreateResetFn(Module &M);
 bool processLoop(Function *F, GlobalVariable *CounterArr, unsigned &slot, int &count);
 bool shouldProcessFunction(Function &F);
