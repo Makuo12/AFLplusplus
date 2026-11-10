@@ -34,61 +34,31 @@ void handleSwitchFallthroughEdge(Instruction &TI, int &count,
   }
 }
 
-void handleInvokeEdges(Instruction &TI, int &invokeAddedCount,
+void handleInvokeEdges(Instruction &TI, int &count,
                        SmallPtrSet<BasicBlock *, 16> &seen) {
   auto *II = dyn_cast<InvokeInst>(&TI);
   if (!II) return;
   LLVMContext &Ctx = II->getContext();
-  Function    *F = II->getFunction();
   Type        *Int32Ty = Type::getInt32Ty(Ctx);
 
-  FunctionType *AsmFTy =
-      FunctionType::get(Type::getVoidTy(Ctx), /*isVarArg=*/false);
+  // Successor 0 is the normal destination, successor 1 the unwind
+  // destination. Only the normal edge is split: the unwind edge leads to a
+  // landing pad, which must stay the direct successor of the invoke
+  // (SplitCriticalEdge refuses EH pads anyway).
+  BasicBlock *NewBB = SplitCriticalEdge(II, /*SuccNum=*/0);
+  if (!NewBB)
+    return;  // not critical: the normal destination's own block trap covers it
 
-  for (unsigned i = 0, e = II->getNumSuccessors(); i != e; ++i) {
-    BasicBlock *EdgeBB = II->getSuccessor(i);
-    // Only instrument the normal-dest edge (i == 0).
-    // The unwind edge already has valid, self-contained EH handling
-    // (landingpad -> catch/terminate/resume) and must not be spliced
-    // with a plain block (see earlier verifier errors).
-    if (i != 0) continue;
-    BasicBlock *NormalDest = EdgeBB;
-    int         id = invokeAddedCount++;
-    MDNode     *MD = MDNode::get(
-        Ctx, ConstantAsMetadata::get(ConstantInt::get(Int32Ty, id)));
+  int id = count++;
+  NewBB->setName("invoke.cont" + std::to_string(id));
 
-    // Encode id as 4 little-endian raw bytes placed right after the
-    // 0xcc trap byte — same convention as the else-edge and loop
-    // guard sites. The runtime reads these directly off the
-    // SIGTRAP return address instead of decoding any instruction,
-    // so the offset (trap+1) is fixed regardless of codegen.
-    InlineAsm *IA = makeTrapAsm(Ctx, id, /*category=*/0);
-
-    if (NormalDest->getSinglePredecessor() == II->getParent()) {
-      // Only this invoke reaches NormalDest — safe to instrument in place,
-      // right after any PHI nodes.
-      IRBuilder<> Builder(NormalDest->getFirstNonPHI());
-      CallInst   *TrapCall = Builder.CreateCall(IA);
-      TrapCall->setMetadata("invoke_block_id", MD);
-      seen.insert(NormalDest);
-    } else {
-      // NormalDest is shared with other predecessors (critical edge) —
-      // splice a private block so the trap fires only for THIS invoke's
-      // success path, not for every path into the shared block.
-      std::string blockName = "invoke.cont" + std::to_string(id);
-      BasicBlock *NewBlock = BasicBlock::Create(Ctx, blockName, F, NormalDest);
-      II->setSuccessor(i, NewBlock);
-      IRBuilder<> Builder(NewBlock);
-      CallInst   *TrapCall = Builder.CreateCall(IA);
-      TrapCall->setMetadata("invoke_block_id", MD);
-      Builder.CreateBr(NormalDest);
-      for (PHINode &PN : NormalDest->phis()) {
-        int Idx = PN.getBasicBlockIndex(II->getParent());
-        if (Idx >= 0) PN.setIncomingBlock(Idx, NewBlock);
-      }
-      seen.insert(NewBlock);
-    }
-  }
+  IRBuilder<> Builder(
+      NewBB->getTerminator());  // before the br SplitCriticalEdge added
+  CallInst *TrapCall = Builder.CreateCall(makeTrapAsm(Ctx, id, /*category=*/0));
+  MDNode   *MD =
+      MDNode::get(Ctx, ConstantAsMetadata::get(ConstantInt::get(Int32Ty, id)));
+  TrapCall->setMetadata("invoke_block_id", MD);
+  seen.insert(NewBB);
 }
 
 void countCriticalEdge(Instruction &TI, int &globalCount,
