@@ -32,9 +32,10 @@ static int32_t getMetaId(MDNode *MD)
  * Metadata kinds written by the instrumentation:
  *   else_block_id            handleIfEdges            (if.else.new<id> block)
  *   switch_fallthrough_id    handleSwitchFallthroughEdge (sw.edge<id> block)
- *   invoke_block_id          handleInvokeEdges        (in place, or invoke.cont<id>)
+ *   invoke_block_id          handleInvokeEdges        (invoke.cont<id> block)
  *   block_id                 instrumentBlocks         (in place)
- *   loop_header_id           insertCounterGuard       (in place, takes slot ptr)
+ *   loop_header_id           insertCounterGuard       (in place, takes slot
+ * ptr)
  */
 void findTrapInstructions(
     Module &M, unordered_set<int32_t> &metaIds,
@@ -91,7 +92,7 @@ void findTrapInstructions(
 
 /* ---------------- EDGE-BLOCK REMOVAL ----------------
  * if.else.new<id>, sw.edge<id> and invoke.cont<id> are all blocks the
- * instrumentation created to host exactly one trap:
+ * instrumentation created on a critical edge to host exactly one trap:
  *     Pred --> [ call trap ; br Succ ] --> Succ
  * Removing the trap means bypassing the block: point Pred's terminator at
  * Succ, repoint Succ's PHI entries from the block to Pred, delete the block.
@@ -158,25 +159,14 @@ void removeSwitchFallthroughInstrumentation(unordered_set<int32_t> &, std::vecto
     removeEdgeBlockTraps(traps, "switch edge");
 }
 
-// Two shapes (see handleInvokeEdges):
-//   - spliced:  invoke.cont<id> = [trap; br NormalDest]   -> bypass the block
-//   - in place: trap sits at the top of NormalDest (before its first
-//               non-PHI instruction, possibly ahead of a block_id trap),
-//               so just erase the call.
-void removeInvokeInstrumentation(unordered_set<int32_t> &, std::vector<CallInst *> &traps)
-{
-    for (CallInst *Trap : traps)
-    {
-        if (tryBypassTrapBlock(Trap))
-            continue;
-        if (!Trap->use_empty())
-        {
-            errs() << "[deinstr] ERROR: invoke trap in '" << Trap->getParent()->getName()
-                   << "' has unexpected uses -- skipping\n";
-            continue;
-        }
-        Trap->eraseFromParent();
-    }
+// invoke.cont<id> is a block SplitCriticalEdge created on the invoke's
+// normal-destination edge (see handleInvokeEdges):
+//     InvokeBB --normal--> [ call trap ; br NormalDest ] --> NormalDest
+// Same shape as the if/switch edge blocks: bypass it, so the invoke's normal
+// destination points straight at NormalDest again.
+void removeInvokeInstrumentation(unordered_set<int32_t> &,
+                                 std::vector<CallInst *> &traps) {
+  removeEdgeBlockTraps(traps, "invoke edge");
 }
 
 /* ---------------- BLOCK TRAPS ----------------
