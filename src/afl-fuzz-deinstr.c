@@ -39,7 +39,7 @@ static u32   de_edge_loop_count; /* new loop buckets since last rebuild      */
 static u32   de_edge_max = 4000; /* DE_EDGE_MAX env                          */
 static u8    de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
 static u8    de_enabled;         /* config validated at startup              */
-static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file, *de_shared_file, *de_bitcode_file, *de_lib_include;
+static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file;
 static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
 static char *de_extra_argv[96];
 static int   de_extra_argc;
@@ -90,9 +90,6 @@ void deinstr_setup(afl_state_t *afl) {
   de_clangxx = getenv("DE_CLANGXX");
   de_base = getenv("BASE_ADDRESS");
   de_ir_file = getenv("DE_IR_FILE");
-  de_shared_file = getenv("DE_SHARED_FILE");
-  de_bitcode_file = getenv("DE_BITCODE_FILE");
-  de_lib_include = getenv("DE_LIB_INCLUDE");
 
   if (!de_clangxx) { de_clangxx = "clang++"; }
 
@@ -115,13 +112,22 @@ void deinstr_setup(afl_state_t *afl) {
   }
   if (!de_base) { de_base = "0x400000"; }
 
-  if (!de_out_home || !de_meta || !de_thr) {
+  if (!de_out_home || !de_meta || !de_thr || !de_ir_file) {
     WARNF(
-        "OUTPUT_HOME / META_DATA_FILE / LOOP_THRESHOLD_FILE not all set - "
-        "de-instrumentation DISABLED.");
+        "OUTPUT_HOME / META_DATA_FILE / LOOP_THRESHOLD_FILE / DE_IR_FILE not "
+        "all set - de-instrumentation DISABLED.");
     return;
   }
-  u8 *need[] = {"remove_edge", de_ir_file, de_shared_file, de_bitcode_file, NULL};
+
+  /* afl-fuzz links only the IR: the harness (shared.bc + forkserver.bc or
+     persistent.bc) and the closure runtime must come from DE_LINK_EXTRA. */
+  if (!de_extra_argc) {
+    WARNF(
+        "DE_LINK_EXTRA is empty (no harness to link) - de-instrumentation "
+        "DISABLED.");
+    return;
+  }
+  u8 *need[] = {"remove_edge", de_ir_file, NULL};
   for (i = 0; need[i]; i++) {
     u8 *p = alloc_printf("%s/%s", de_out_home, need[i]);
     if (access(p, R_OK)) {
@@ -166,9 +172,6 @@ static int remove_instrumentation(afl_state_t *afl) {
   u8 *remove_edge_bin = alloc_printf("%s/remove_edge", de_out_home);
   u8 *in_ll = alloc_printf("%s/%s", de_out_home, de_ir_file);
   u8 *new_ll = alloc_printf("%s/new.ll", de_out_home);
-  u8 *shared_bc = alloc_printf("%s/%s", de_out_home, de_shared_file);
-  u8 *fuzz_bc = alloc_printf("%s/%s", de_out_home, de_bitcode_file);
-  u8 *lib_include = alloc_printf("%s", de_lib_include);
   u8 *new_bin = alloc_printf("%s.new", target_path);
   u8 *base_flag = alloc_printf("-Wl,--image-base=%s", de_base);
 
@@ -192,10 +195,7 @@ static int remove_instrumentation(afl_state_t *afl) {
 
   stage2[n++] = "-Xclang";
   stage2[n++] = "-disable-llvm-passes";
-  stage2[n++] = (char *)lib_include;
   stage2[n++] = (char *)new_ll;
-  stage2[n++] = (char *)fuzz_bc;
-  stage2[n++] = (char *)shared_bc;
   for (int k = 0; k < de_extra_argc; k++) {
     stage2[n++] = de_extra_argv[k];
   }
@@ -247,8 +247,6 @@ out:
   ck_free(remove_edge_bin);
   ck_free(in_ll);
   ck_free(new_ll);
-  ck_free(fuzz_bc);
-  ck_free(shared_bc);
   ck_free(new_bin);
   ck_free(base_flag);
   return ret;
