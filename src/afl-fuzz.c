@@ -1645,9 +1645,13 @@ void afl_check_environment(afl_state_t *afl) {
     trap_mode_setup(afl);
   }
 
-  if (getenv("AFL_NO_UI") && getenv("AFL_FORCE_UI")) {
-    FATAL("AFL_NO_UI and AFL_FORCE_UI are mutually exclusive");
+  if (get_afl_env("FOR_DE_INSTRUMENT")) {
+    afl->de_instrument_mode = 1;
   }
+
+    if (getenv("AFL_NO_UI") && getenv("AFL_FORCE_UI")) {
+      FATAL("AFL_NO_UI and AFL_FORCE_UI are mutually exclusive");
+    }
 
   if (unlikely(afl->afl_env.afl_statsd)) { statsd_setup_format(afl); }
 

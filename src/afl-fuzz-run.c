@@ -1285,7 +1285,7 @@ u8 __attribute__((hot)) common_fuzz_stuff(afl_state_t *afl, u8 *out_buf,
 
   /* trap mode: rebuild the target without retired traps once enough new
      coverage has accumulated (src/afl-fuzz-deinstr.c) */
-  if (unlikely(afl->trap_mode)) { maybe_deinstrument(afl); }
+  if (unlikely(afl->trap_mode && afl->de_instrument_mode)) { maybe_deinstrument(afl); }
 
   return 0;
 }

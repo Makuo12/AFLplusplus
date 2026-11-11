@@ -719,6 +719,7 @@ typedef struct afl_state {
       non_instrumented_mode, /* Run in non-instrumented mode?    */
       score_changed,         /* Scoring for favorites changed?   */
       trap_mode,             /* Trap-based instrumentation       */
+      de_instrument_mode,
       trap_seen_cov,         /* any trap ever reported?          */
       resuming_fuzz,         /* Resuming an older fuzzing job?   */
       timeout_given,         /* Specific timeout given?          */
