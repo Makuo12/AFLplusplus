@@ -39,7 +39,7 @@ static u32   de_edge_loop_count; /* new loop buckets since last rebuild      */
 static u32   de_edge_max = 4000; /* DE_EDGE_MAX env                          */
 static u8    de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
 static u8    de_enabled;         /* config validated at startup              */
-static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base;
+static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file, *de_shared_file, *de_bitcode_file;
 static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
 static char *de_extra_argv[96];
 static int   de_extra_argc;
@@ -76,11 +76,10 @@ static int de_run(char *const argv[]) {
 /* Read and validate the configuration once, at startup. */
 
 void deinstr_setup(afl_state_t *afl) {
-  static const char *need[] = {"remove_edge", "main.transformed.ll",
-                               "fuzzer.bc", NULL};
-  u32                i;
+  u32 i;
 
   if (!afl->trap_mode) { return; }
+  
 
   if (getenv("DE_EDGE_MAX")) { de_edge_max = atoi(getenv("DE_EDGE_MAX")); }
   if (getenv("DE_EDGE_ARC")) { de_arc = 1; }
@@ -90,6 +89,10 @@ void deinstr_setup(afl_state_t *afl) {
   de_thr = getenv("LOOP_THRESHOLD_FILE");
   de_clangxx = getenv("DE_CLANGXX");
   de_base = getenv("BASE_ADDRESS");
+  de_ir_file = getenv("DE_IR_FILE");
+  de_shared_file = getenv("DE_SHARED_FILE");
+  de_bitcode_file = getenv("DE_BITCODE_FILE");
+
   if (!de_clangxx) { de_clangxx = "clang++"; }
 
   /* Split DE_LINK_EXTRA into separate arguments once, at startup. */
@@ -117,7 +120,7 @@ void deinstr_setup(afl_state_t *afl) {
         "de-instrumentation DISABLED.");
     return;
   }
-
+  u8 *need[] = {"remove_edge", de_ir_file, de_shared_file, de_bitcode_file, NULL};
   for (i = 0; need[i]; i++) {
     u8 *p = alloc_printf("%s/%s", de_out_home, need[i]);
     if (access(p, R_OK)) {
