@@ -136,7 +136,7 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
     else if (value < LOOP_START_ADD)
       new_value = value + BUCKET_SMALL_INC;
     else
-      new_value = value * MULTI_INC;
+      new_value = value + ADD_INC;
 
     memcpy(&index_block, (void *)(addr + 5), sizeof(index_block));
     if (new_value >= MAX_LOOP) {
@@ -146,13 +146,10 @@ void trap_handler(int sig, siginfo_t *info, void *ctx) {
       memcpy((void *)num_addr, &new_value, sizeof(new_value));
       resume_addr = cmp_addr;
     }
-
     if (new_value <= LOOP_START_ADD)
-      bucket_value = (new_value / 2) - 1;
-    else
-      for (uint32_t v = (uint32_t)new_value; v >= 4; v >>= 2)
-        bucket_value++; /* floor(log4(new_value)), no libm */
-
+      bucket_value = new_value / 2;
+    else 
+      bucket_value = 5 + ((new_value / 10) - 1);
     record_hit(index_block, (uint32_t)bucket_value + 1, 1);
   } else if (*trap == 0xcc) {
     memcpy(&index_block, (void *)(addr + 1), sizeof(index_block));

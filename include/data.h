@@ -23,7 +23,7 @@ typedef struct
     int32_t is_edge_count;
 } Trace;
 
-#define MAX_LOOP 256
+#define MAX_LOOP 600
 
 typedef enum
 {
@@ -39,9 +39,10 @@ typedef struct
   UT_hash_handle hh;
 } LoopThresholdEntry;
 
-#define LOOP_START_ADD 4
+#define LOOP_START_ADD 10
 #define BUCKET_INC 32
 #define MULTI_INC 4
+#define ADD_INC 10
 #define BUCKET_SMALL_INC 2
 
 #define HAVOC_BASE_CYCLES 500  /* havoc execs at perf_score == 100  */
