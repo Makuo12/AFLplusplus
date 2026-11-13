@@ -285,8 +285,7 @@ static void clear_file(const u8 *path) {
 /* Called after every fuzzing execution, from common_fuzz_stuff(). */
 
 void maybe_deinstrument(afl_state_t *afl) {
-  if (likely(!de_enabled) ||
-      likely(de_edge_count + de_edge_loop_count <= de_edge_max)) {
+  if (likely(!de_enabled) || likely(de_edge_count + de_edge_loop_count <= de_edge_max) || likely(de_edge_count < 300)) {
     return;
   }
 
