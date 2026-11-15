@@ -102,6 +102,8 @@ fsrv_run_result_t __attribute__((hot)) fuzz_run_target(afl_state_t      *afl,
           loop_count += value;
         }
       }
+      OKF("Trap mode: %d new edges, %d new loop buckets", edge_count,
+          loop_count);
       t[TRAP_NEW_EDGE_IDX] = edge_count;
       t[TRAP_NEW_LOOP_IDX] = loop_count;
       afl->trap_virgin_count = edge_count + loop_count;
