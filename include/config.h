@@ -422,6 +422,8 @@
 #define INTERESTING_32_LEN 9
 
 /***********************************************************
+// #define TRAP_NEW_EDGE_IDX 0
+// #define TRAP_NEW_LOOP_IDX 3
  *                                                         *
  *  Really exotic stuff you probably don't want to touch:  *
  *                                                         *
