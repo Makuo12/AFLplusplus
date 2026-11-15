@@ -101,7 +101,6 @@ u8 has_new_traps(afl_state_t *afl) {
 /* How much new coverage the last run reported (edges + loop buckets). */
 
 u32 trap_count_bytes(afl_state_t *afl) {
-  OKF("count bytes: trap_virgin_count: %d", afl->trap_virgin_count);
   return (u32)afl->trap_virgin_count;
 }
 
@@ -111,7 +110,6 @@ u32 trap_count_bytes(afl_state_t *afl) {
 u32 trap_count_virgin_entries(afl_state_t *afl) {
   /* Kept up to date in fuzz_run_target() from the harness's first-hit
      counters, instead of scanning all TRAP_VIRGIN_WORDS entries. */
-  OKF("count entries: trap_virgin_count: %d", afl->trap_virgin_count);
   return (u32)afl->trap_virgin_count;
 }
 
