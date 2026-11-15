@@ -89,8 +89,16 @@ fsrv_run_result_t __attribute__((hot)) fuzz_run_target(afl_state_t      *afl,
      in these two counters. */
   if (unlikely(afl->trap_mode) && fsrv == &afl->fsrv) {
     u32 *t = (u32 *)fsrv->trace_bits;
-    afl->trap_virgin_count += t[TRAP_NEW_EDGE_IDX] + t[TRAP_NEW_LOOPHDR_IDX];
-    deinstr_note_run(afl);
+    if (t[TRAP_NEW_EDGE_IDX] || t[TRAP_NEW_LOOPHDR_IDX]) {
+      int count = 0;
+      for (u32 i = 0; i < TRAP_VIRGIN_WORDS; ++i) {
+        count += afl->trap_virgin_bits[i];
+      }
+      // u32 *t = (u32 *)fsrv->trace_bits;
+      // afl->trap_virgin_count += t[TRAP_NEW_EDGE_IDX] + t[TRAP_NEW_LOOPHDR_IDX];
+      afl->trap_virgin_count = count;
+      deinstr_note_run(afl);
+    }
   }
 
 #ifdef __AFL_CODE_COVERAGE
