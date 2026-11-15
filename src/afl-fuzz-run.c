@@ -94,7 +94,7 @@ fsrv_run_result_t __attribute__((hot)) fuzz_run_target(afl_state_t      *afl,
       for (u32 i = 0; i < TRAP_VIRGIN_WORDS; ++i) {
         count += afl->trap_virgin_bits[i];
       }
-      OKF("Trap mode: %d new edges, %d new loop buckets", count);
+      OKF("Trap mode: %d new edges, %d new loop buckets\n", t[TRAP_NEW_EDGE_IDX]+t[TRAP_NEW_LOOP_IDX]);
       afl->trap_virgin_count = count;
       deinstr_note_run(afl);
     }
