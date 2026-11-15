@@ -1477,7 +1477,7 @@ u8   trap_is_heavy_entry(afl_state_t *, struct queue_entry *);
 u8   trap_log_due(void);
 /* De-instrumentation (trap mode), src/afl-fuzz-deinstr.c */
 void deinstr_setup(afl_state_t *);
-void deinstr_note_run(afl_state_t *);
+void deinstr_note_run(afl_state_t *afl, int edge_count, int loop_count);
 void maybe_deinstrument(afl_state_t *);
 /* End of Trap based instrumentation */
 u8   save_if_interesting(afl_state_t *, void *, u32, u8);

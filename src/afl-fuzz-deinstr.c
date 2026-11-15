@@ -149,10 +149,10 @@ void deinstr_setup(afl_state_t *afl) {
    that run are still in trace_bits. Same tally as run_target() in the old
    fork. */
 
-void deinstr_note_run(afl_state_t *afl) {
-  u32 *t = (u32 *)afl->fsrv.trace_bits;
-  de_edge_count += t[TRAP_NEW_EDGE_IDX];
-  de_edge_loop_count += t[TRAP_NEW_LOOP_IDX];
+void deinstr_note_run(afl_state_t *afl, int edge_count, int loop_count) {
+  (void)afl;
+  de_edge_count += edge_count;
+  de_edge_loop_count += loop_count;
 }
 
 /* Returns 0 on success. Order of commits is chosen so every partial failure

@@ -86,7 +86,7 @@ void trap_remove_shm(afl_state_t *afl) {
 /* The harness writes its two counters as u32 into the first words of
    AFL++'s coverage map (AFL++ zeroes the whole map before every run). */
 
-static inline u32 *access_trap_bits(afl_state_t *afl) {
+static inline u32 *trap_counters(afl_state_t *afl) {
   return (u32 *)afl->fsrv.trace_bits;
 }
 
@@ -94,20 +94,14 @@ static inline u32 *access_trap_bits(afl_state_t *afl) {
    Same as your has_new_traps(); 2 means "new coverage" to AFL++ too. */
 
 u8 has_new_traps(afl_state_t *afl) {
-  u32 *t = access_trap_bits(afl);
+  u32 *t = trap_counters(afl);
   return (t[TRAP_NEW_EDGE_IDX] || t[TRAP_NEW_LOOP_IDX]) ? 2 : 0;
 }
 
 /* How much new coverage the last run reported (edges + loop buckets). */
 
-
-
 u32 trap_count_bytes(afl_state_t *afl) {
-  u32 count = 0;
-  for (u32 i = 0; i < TRAP_VIRGIN_WORDS; ++i) {
-    count += afl->trap_virgin_bits[i];
-  }
-  return count;
+  return (u32)afl->trap_virgin_count;
 }
 
 /* Number of trap ids ever reported, read from the harness's virgin map.

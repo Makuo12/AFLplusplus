@@ -89,15 +89,23 @@ fsrv_run_result_t __attribute__((hot)) fuzz_run_target(afl_state_t      *afl,
      in these two counters. */
   if (unlikely(afl->trap_mode) && fsrv == &afl->fsrv) {
     u32 *t = (u32 *)fsrv->trace_bits;
-    if (t[TRAP_NEW_EDGE_IDX] || t[TRAP_NEW_LOOPHDR_IDX]) {
-      int count = 0;
+    if (t[TRAP_NEW_EDGE_IDX] || t[TRAP_NEW_LOOP_IDX]) {
+      int edge_count = 0;
+      int loop_count = 0;
       for (u32 i = 0; i < TRAP_VIRGIN_WORDS; ++i) {
-        count += afl->trap_virgin_bits[i];
+        int value = afl->trap_virgin_bits[i];
+        if (value <= 0) {
+          continue;
+        } else if (value == 1) {
+          edge_count += value;
+        } else {
+          loop_count += value;
+        }
       }
-      // u32 *t = (u32 *)fsrv->trace_bits;
-      // afl->trap_virgin_count += t[TRAP_NEW_EDGE_IDX] + t[TRAP_NEW_LOOPHDR_IDX];
-      afl->trap_virgin_count = count;
-      deinstr_note_run(afl);
+      t[TRAP_NEW_EDGE_IDX] = edge_count;
+      t[TRAP_NEW_LOOP_IDX] = loop_count;
+      afl->trap_virgin_count = edge_count + loop_count;
+      deinstr_note_run(afl, edge_count, loop_count);
     }
   }
 
