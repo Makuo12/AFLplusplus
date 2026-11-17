@@ -39,7 +39,9 @@ static u32   de_edge_loop_count; /* new loop buckets since last rebuild      */
 static u32   de_edge_max = 4000; /* DE_EDGE_MAX env                          */
 static u8    de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
 static u8    de_enabled;         /* config validated at startup              */
+static u8    de_on; /*this is set to true only when the first de-instrumentation has been performed*/
 static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file;
+static time_t de_start_up;
 static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
 static char *de_extra_argv[96];
 static int   de_extra_argc;
@@ -140,6 +142,7 @@ void deinstr_setup(afl_state_t *afl) {
   }
 
   de_enabled = 1;
+  de_start_up = time(NULL);
   OKF("De-instrumentation enabled (threshold %u edges, %d extra link args).",
       de_edge_max, de_extra_argc);
 }
@@ -287,6 +290,18 @@ static void clear_file(const u8 *path) {
 void maybe_deinstrument(afl_state_t *afl) {
   if (likely(!de_enabled) || likely(de_edge_count + de_edge_loop_count <= de_edge_max) || likely(de_edge_count < 300)) {
     return;
+  }
+
+
+
+  if (!de_on) {
+    time_t current_time = time(NULL);
+    double difference = difftime(current_time, de_start_up);
+    if (difference < 60*60) {
+      return;
+    } else {
+      de_on = 1;
+    }
   }
 
   ACTF("De-instrumenting (%u new edges, %u loop buckets)...", de_edge_count,
