@@ -46,6 +46,8 @@ static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
 static char *de_extra_argv[96];
 static int   de_extra_argc;
 
+static int de_run_time_to_start = 0;
+
 /* Run a command and wait for it. 0 on success. */
 
 static int de_run(char *const argv[]) {
@@ -92,6 +94,19 @@ void deinstr_setup(afl_state_t *afl) {
   de_clangxx = getenv("DE_CLANGXX");
   de_base = getenv("BASE_ADDRESS");
   de_ir_file = getenv("DE_IR_FILE");
+
+  de_run_time_to_start = 2 * 60 * 60; /* default: 3 hours */
+
+  char *value = getenv("DE_RUN_TIME_TO_START");
+  if (value) {
+    int number = atoi(value);
+    if (number >= 60) {
+      de_run_time_to_start = number;
+    } else {
+      WARNF("DE_RUN_TIME_TO_START=%s is below 60 seconds - using the default.",
+            value);
+    }
+  }
 
   if (!de_clangxx) { de_clangxx = "clang++"; }
 
@@ -297,7 +312,7 @@ void maybe_deinstrument(afl_state_t *afl) {
   if (!de_on) {
     time_t current_time = time(NULL);
     double difference = difftime(current_time, de_start_up);
-    if (difference < 60*60) {
+    if (difference < de_run_time_to_start) {
       return;
     } else {
       de_on = 1;
