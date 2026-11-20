@@ -95,7 +95,7 @@ void deinstr_setup(afl_state_t *afl) {
   de_base = getenv("BASE_ADDRESS");
   de_ir_file = getenv("DE_IR_FILE");
 
-  de_run_time_to_start = 2 * 60 * 60; /* default: 3 hours */
+  de_run_time_to_start = 1 * 60 * 60; /* default: 3 hours */
 
   char *value = getenv("DE_RUN_TIME_TO_START");
   if (value) {
