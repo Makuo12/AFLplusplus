@@ -195,6 +195,16 @@ void fuzzbiosis_load(afl_forkserver_t *fsrv, char **argv, u8 debug_output) {
   afl_state_t *afl = (afl_state_t *)fsrv->afl_ptr;
   ip_afl = afl;
 
+  /* The linked target is a trap target: its probes only mean something in
+     trap mode (trap map, 64-byte trace, trap calibration). Without it, the
+     stock code paths misread the trap counters and the dry run stops with a
+     misleading "No instrumentation detected". */
+  if (!afl->trap_mode) {
+    FATAL(
+        "inproc: trap mode is off, but the linked target is a trap target. "
+        "Set AFL_TRAP_MODE=1 (or build the trap-only AFL++ tree)");
+  }
+
   if (!LLVMFuzzerTestOneInput) {
     FATAL(
         "inproc: no target linked into afl-fuzz. Build it with "
