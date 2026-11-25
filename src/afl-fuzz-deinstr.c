@@ -34,17 +34,18 @@
 #include "afl-fuzz.h"
 #include <sys/wait.h>
 
-static u32   de_edge_count;      /* new edges since last de-instrumentation  */
-static u32   de_edge_loop_count; /* new loop buckets since last rebuild      */
-static u32   de_edge_max = 4000; /* DE_EDGE_MAX env                          */
-static u8    de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
-static u8    de_enabled;         /* config validated at startup              */
-static u8    de_on; /*this is set to true only when the first de-instrumentation has been performed*/
-static u8   *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file;
+static u32 de_edge_count;      /* new edges since last de-instrumentation  */
+static u32 de_edge_loop_count; /* new loop buckets since last rebuild      */
+static u32 de_edge_max = 4000; /* DE_EDGE_MAX env                          */
+static u8  de_arc;             /* DE_EDGE_ARC env: bfd + image-base link   */
+static u8  de_enabled;         /* config validated at startup              */
+static u8  de_on; /*this is set to true only when the first de-instrumentation
+                     has been performed*/
+static u8 *de_out_home, *de_meta, *de_thr, *de_clangxx, *de_base, *de_ir_file;
 static time_t de_start_up;
-static u8   *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
-static char *de_extra_argv[96];
-static int   de_extra_argc;
+static u8    *de_link_extra; /* DE_LINK_EXTRA: owned copy, tokenized once */
+static char  *de_extra_argv[96];
+static int    de_extra_argc;
 
 static int de_run_time_to_start = 0;
 
@@ -79,11 +80,35 @@ static int de_run(char *const argv[]) {
 
 /* Read and validate the configuration once, at startup. */
 
+/* Fuzzbiosis archive build (src/afl-inproc.c): the target is statically
+   linked into afl-fuzz. A rebuild then produces a new libtarget.a, relinks
+   afl-fuzz over its own path and restarts it with execv(). These symbols
+   are defined only in that build, so they are NULL in a forkserver build. */
+extern const int afl_inproc_executor __attribute__((weak));
+const char *fuzzbiosis_exe_path(void) __attribute__((weak));
+int fuzzbiosis_request_restart(afl_state_t *afl, u32 de_edge_max)    __attribute__((weak));
+
+static u8   de_archive;                /* archive build: relink + restart  */
+static char de_archive_tool[PATH_MAX]; /* fuzzbiosis-archive.sh            */
+static char de_relink_tool[PATH_MAX];  /* afl-fuzz-relink.sh               */
+
+/* FUZZBIOSIS_ARCHIVE / FUZZBIOSIS_RELINK, or the script next to afl-fuzz. */
+
+static int de_find_tool(char *dst, const char *env, const char *name) {
+  const char *v = getenv(env);
+  if (v && *v) {
+    snprintf(dst, PATH_MAX, "%s", v);
+  } else {
+    const char *exe = fuzzbiosis_exe_path ? fuzzbiosis_exe_path() : NULL;
+    const char *slash = exe ? strrchr(exe, '/') : NULL;
+    if (!slash) { return -1; }
+    snprintf(dst, PATH_MAX, "%.*s/%s", (int)(slash - exe), exe, name);
+  }
+  return access(dst, X_OK);
+}
+
 void deinstr_setup(afl_state_t *afl) {
   u32 i;
-
-  if (!afl->trap_mode) { return; }
-  
 
   if (getenv("DE_EDGE_MAX")) { de_edge_max = atoi(getenv("DE_EDGE_MAX")); }
   if (getenv("DE_EDGE_ARC")) { de_arc = 1; }
@@ -140,7 +165,8 @@ void deinstr_setup(afl_state_t *afl) {
      persistent.bc) and the closure runtime must come from DE_LINK_EXTRA. */
   if (!de_extra_argc) {
     WARNF(
-        "DE_LINK_EXTRA is empty (no harness to link) - de-instrumentation "
+        "DE_LINK_EXTRA is empty (no harness or runtime to link) - "
+        "de-instrumentation "
         "DISABLED.");
     return;
   }
@@ -156,8 +182,29 @@ void deinstr_setup(afl_state_t *afl) {
     ck_free(p);
   }
 
+  if (&afl_inproc_executor) {
+    if (de_find_tool(de_archive_tool, "FUZZBIOSIS_ARCHIVE",
+                     "fuzzbiosis-archive.sh") ||
+        de_find_tool(de_relink_tool, "FUZZBIOSIS_RELINK",
+                     "afl-fuzz-relink.sh")) {
+      WARNF(
+          "fuzzbiosis-archive.sh / afl-fuzz-relink.sh not found next to "
+          "afl-fuzz (or FUZZBIOSIS_ARCHIVE / FUZZBIOSIS_RELINK) - "
+          "de-instrumentation DISABLED.");
+      return;
+    }
+    de_archive = 1;
+  }
+
   de_enabled = 1;
   de_start_up = time(NULL);
+
+  /* Restarted after a de-instrumentation: the start delay has passed
+     already, and the threshold may have been raised. */
+  if (getenv("FUZZBIOSIS_DE_ON")) { de_on = 1; }
+  if (getenv("FUZZBIOSIS_DE_EDGE_MAX")) {
+    de_edge_max = atoi(getenv("FUZZBIOSIS_DE_EDGE_MAX"));
+  }
   OKF("De-instrumentation enabled (threshold %u edges, %d extra link args).",
       de_edge_max, de_extra_argc);
 }
@@ -183,8 +230,128 @@ void deinstr_note_run(afl_state_t *afl) {
    fails after step 3, the old binary keeps running, the next attempt rebuilds
    from the already-reduced IR, and stale ids in the meta file are harmless. */
 
+/* Archive build. Same idea, more derived artifacts; still every partial
+   failure is harmless:
+     1. remove_edge  old IR -> new_ll                          (nothing
+   committed)
+     2. compile      new_ll -> new_target.o                    (nothing
+   committed)
+     3. archive      new_target.o + DE_LINK_EXTRA -> new_lib   (nothing
+   committed)
+     4. relink       afl-fuzz objects + new_lib -> new_exe     (nothing
+   committed)
+     5. promote IR   new_ll -> DE_IR_FILE
+     6. swap binary  new_exe -> this afl-fuzz (rename() works while it runs)
+   The running process keeps the old code until it re-executes itself.
+   The archive is kept as OUTPUT_HOME/libtarget.a for reference. */
+
+static int remove_instrumentation_archive(afl_state_t *afl) {
+  int         ret = -1;
+  const char *exe = fuzzbiosis_exe_path();
+  (void)afl;
+
+  u8 *remove_edge_bin = alloc_printf("%s/remove_edge", de_out_home);
+  u8 *in_ll = alloc_printf("%s/%s", de_out_home, de_ir_file);
+  u8 *new_ll = alloc_printf("%s/new.ll", de_out_home);
+  u8 *new_obj = alloc_printf("%s/new_target.o", de_out_home);
+  u8 *new_lib = alloc_printf("%s/libtarget.new.a", de_out_home);
+  u8 *lib = alloc_printf("%s/libtarget.a", de_out_home);
+  u8 *new_exe = alloc_printf("%s.new", exe);
+
+  char *stage1[] = {(char *)remove_edge_bin, "-i", (char *)in_ll,  "-m",
+                    (char *)de_meta,         "-o", (char *)new_ll, "-l",
+                    (char *)de_thr,          NULL};
+
+  /* Code generation only, as in the forkserver build's final link. */
+  char *stage2[] = {(char *)de_clangxx,
+                    "-O3",
+                    "-funroll-loops",
+                    "-DNDEBUG",
+                    "-fno-stack-protector",
+                    "-fomit-frame-pointer",
+                    "-fno-semantic-interposition",
+                    "-fvisibility=hidden",
+                    "-Xclang",
+                    "-disable-llvm-passes",
+                    "-c",
+                    (char *)new_ll,
+                    "-o",
+                    (char *)new_obj,
+                    NULL};
+
+  /* The archive tool bundles the target with its runtime (DE_LINK_EXTRA:
+     objects, bitcode, -Wl,--wrap=... flags) and hides every symbol but the
+     entry points, so nothing clashes with afl-fuzz's own. */
+  char *stage3[160];
+  int   n = 0;
+  stage3[n++] = de_archive_tool;
+  stage3[n++] = "-o";
+  stage3[n++] = (char *)new_lib;
+  stage3[n++] = (char *)new_obj;
+  for (int k = 0; k < de_extra_argc; k++) {
+    stage3[n++] = de_extra_argv[k];
+  }
+  stage3[n] = NULL;
+
+  char *stage4[] = {de_relink_tool, (char *)new_lib, (char *)new_exe, NULL};
+
+  if (de_run(stage1)) {
+    WARNF("remove_edge failed");
+    goto out;
+  }
+  if (de_run(stage2)) {
+    WARNF("compiling the reduced IR failed");
+    goto out;
+  }
+  if (de_run(stage3)) {
+    WARNF("building the target archive failed");
+    goto out;
+  }
+  if (de_run(stage4)) {
+    WARNF("relinking afl-fuzz failed");
+    goto out;
+  }
+
+  /* Step 5: promote IR. If this fails nothing has changed yet. */
+  if (rename(new_ll, in_ll)) {
+    WARNF("could not promote IR '%s'", new_ll);
+    goto out;
+  }
+
+  /* Step 6: swap binary. */
+  if (rename(new_exe, exe)) {
+    WARNF(
+        "could not install '%s' (IR already promoted; next try rebuilds "
+        "from it)",
+        new_exe);
+    goto out;
+  }
+
+  if (rename(new_lib, lib)) { WARNF("could not keep '%s'", lib); }
+  ret = 0;
+
+out:
+  if (ret) { /* ignore errors */
+    unlink(new_exe);
+    unlink(new_lib);
+    unlink(new_ll);
+  }
+  unlink(new_obj);
+
+  ck_free(remove_edge_bin);
+  ck_free(in_ll);
+  ck_free(new_ll);
+  ck_free(new_obj);
+  ck_free(new_lib);
+  ck_free(lib);
+  ck_free(new_exe);
+  return ret;
+}
+
 static int remove_instrumentation(afl_state_t *afl) {
   int ret = -1;
+
+  if (de_archive) { return remove_instrumentation_archive(afl); }
 
   u8 *target_path = afl->fsrv.target_path;
   u8 *remove_edge_bin = alloc_printf("%s/remove_edge", de_out_home);
@@ -303,11 +470,11 @@ static void clear_file(const u8 *path) {
 /* Called after every fuzzing execution, from common_fuzz_stuff(). */
 
 void maybe_deinstrument(afl_state_t *afl) {
-  if (likely(!de_enabled) || likely(de_edge_count + de_edge_loop_count <= de_edge_max) || likely(de_edge_count < 300)) {
+  if (likely(!de_enabled) ||
+      likely(de_edge_count + de_edge_loop_count <= de_edge_max) ||
+      likely(de_edge_count < 300)) {
     return;
   }
-
-
 
   if (!de_on) {
     time_t current_time = time(NULL);
@@ -334,6 +501,12 @@ void maybe_deinstrument(afl_state_t *afl) {
 
     de_edge_count = 0;
     de_edge_loop_count = 0;
+
+    /* Archive build: the new code is in the relinked afl-fuzz on disk.
+       Save the trap state, stop cleanly and re-execute it. */
+    if (de_archive && fuzzbiosis_request_restart(afl, de_edge_max) == 0) {
+      return;
+    }
 
   } else {
     /* Old binary kept. Meta/threshold files are NOT cleared, so the same

@@ -520,8 +520,34 @@ src/afl-forkserver.o: $(COMM_HDR) src/afl-forkserver.c
 src/afl-sharedmem.o: $(COMM_HDR) src/afl-sharedmem.c include/android-ashmem.h include/cmplog.h
 	$(CC) $(CFLAGS) $(CFLAGS_FLTO) $(SPECIAL_PERFORMANCE) -c src/afl-sharedmem.c -o src/afl-sharedmem.o
 
-afl-fuzz: $(COMM_HDR) include/afl-fuzz.h $(AFL_FUZZ_FILES) src/afl-common.o src/afl-sharedmem.o src/afl-forkserver.o src/afl-performance.o include/cmplog.h include/envs.h | test_x86
-	$(CC) $(CFLAGS) $(COMPILE_STATIC) $(CFLAGS_FLTO) $(SPECIAL_PERFORMANCE) $(AFL_FUZZ_FILES) src/afl-common.o src/afl-sharedmem.o src/afl-forkserver.o src/afl-performance.o -o $@ $(PYFLAGS) $(LDFLAGS) -lm
+# Fuzzbiosis: afl-fuzz runs the target in-process. src/afl-inproc.c replaces
+# src/afl-forkserver.c in this link only, and the target is an archive linked
+# in whole:   make afl-fuzz TARGET_LIB=/path/to/libtarget.a
+# The afl-fuzz sources are compiled to objects so that de-instrumentation can
+# relink them with a rebuilt archive: afl-fuzz-relink.sh repeats this link.
+TARGET_LIB         ?=
+FUZZBIOSIS_LDFLAGS ?= -no-pie
+FUZZBIOSIS_LIBS    ?= -lstdc++
+# Own object names (src/fb-*.o): some src/afl-fuzz-*.o have other rules (unit tests).
+AFL_FUZZ_OBJS       = $(patsubst src/%.c,src/fb-%.o,$(AFL_FUZZ_FILES))
+FUZZBIOSIS_LINK     = $(CC) $(CFLAGS_FLTO) $(SPECIAL_PERFORMANCE) $(addprefix $(CURDIR)/,$(AFL_FUZZ_OBJS) src/afl-common.o src/afl-sharedmem.o src/afl-inproc.o src/afl-performance.o) $(FUZZBIOSIS_LDFLAGS)
+FUZZBIOSIS_LINK_END = $(if $(PYFLAGS),$(PYTHON_LIB)) $(LDFLAGS) -lm $(FUZZBIOSIS_LIBS)
+# The target archive, linked in whole (commas cannot appear inside $(if)).
+FUZZBIOSIS_TARGET   = $(if $(TARGET_LIB),-Wl$(FUZZBIOSIS_COMMA)--whole-archive $(abspath $(TARGET_LIB)) -Wl$(FUZZBIOSIS_COMMA)--no-whole-archive)
+FUZZBIOSIS_COMMA   := ,
+# PYFLAGS minus its linker part, for compiling the objects alone.
+FUZZBIOSIS_PY_CFLAGS = $(if $(PYFLAGS),-DUSE_PYTHON $(PYTHON_INCLUDE) -DPYTHON_VERSION="\"$(PYTHON_VERSION)\"")
+
+src/fb-%.o: src/%.c $(COMM_HDR) include/afl-fuzz.h include/envs.h include/cmplog.h
+	$(CC) $(CFLAGS) $(CFLAGS_FLTO) $(SPECIAL_PERFORMANCE) $(FUZZBIOSIS_PY_CFLAGS) -c $< -o $@
+
+src/afl-inproc.o: $(COMM_HDR) src/afl-inproc.c include/afl-inproc.h include/forkserver.h include/afl-fuzz.h
+	$(CC) $(CFLAGS) $(CFLAGS_FLTO) $(SPECIAL_PERFORMANCE) -c src/afl-inproc.c -o src/afl-inproc.o
+
+afl-fuzz: $(COMM_HDR) include/afl-fuzz.h $(AFL_FUZZ_OBJS) src/afl-common.o src/afl-sharedmem.o src/afl-inproc.o src/afl-performance.o $(TARGET_LIB) include/cmplog.h include/envs.h | test_x86
+	$(FUZZBIOSIS_LINK) $(FUZZBIOSIS_TARGET) -o $@ $(FUZZBIOSIS_LINK_END)
+	@printf '%s\n' '#!/bin/sh' '# Relink afl-fuzz with a rebuilt target archive (used by de-instrumentation).' '# usage: afl-fuzz-relink.sh <libtarget.a> <output>' 'set -e' 'exec $(FUZZBIOSIS_LINK) -Wl,--whole-archive "$$1" -Wl,--no-whole-archive -o "$$2" $(FUZZBIOSIS_LINK_END)' > afl-fuzz-relink.sh
+	@chmod +x afl-fuzz-relink.sh
 ifdef IS_IOS
 	@ldid -Sentitlements.plist $@ && echo "[+] Signed $@" || { echo "[-] Failed to sign $@"; }
 endif
@@ -767,7 +793,7 @@ all_done: test_build
 
 .PHONY: clean
 clean:
-	rm -rf $(PROGS) afl-merge afl-fuzz-document as afl-as afl-g++ afl-clang afl-clang++ *.o src/*.o *~ a.out core core.[1-9][0-9]* *.stackdump .test .test1 .test2 test-instr .test-instr0 .test-instr1 afl-cs-proxy afl-qemu-trace afl-qemu-bridge afl-gcc-fast afl-g++-fast ld *.so *.8 test/unittests/*.o test/unittests/unit_maybe_alloc test/unittests/preallocable test/unittests/unit_value_profile .afl-* afl-gcc afl-g++ afl-clang afl-clang++ test/unittests/unit_hash test/unittests/unit_rand *.dSYM lib*.a
+	rm -rf $(PROGS) afl-merge afl-fuzz-document afl-fuzz-relink.sh as afl-as afl-g++ afl-clang afl-clang++ *.o src/*.o *~ a.out core core.[1-9][0-9]* *.stackdump .test .test1 .test2 test-instr .test-instr0 .test-instr1 afl-cs-proxy afl-qemu-trace afl-qemu-bridge afl-gcc-fast afl-g++-fast ld *.so *.8 test/unittests/*.o test/unittests/unit_maybe_alloc test/unittests/preallocable test/unittests/unit_value_profile .afl-* afl-gcc afl-g++ afl-clang afl-clang++ test/unittests/unit_hash test/unittests/unit_rand *.dSYM lib*.a
 	-$(MAKE) -f GNUmakefile.llvm clean
 	-$(MAKE) -f GNUmakefile.gcc_plugin clean
 	-$(MAKE) -C utils/libdislocator clean
