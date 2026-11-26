@@ -130,6 +130,7 @@ int fuzzbiosis_request_restart(afl_state_t *afl, u32 de_edge_max) {
   /* The environment survives execv(): it carries the restart state. */
   setenv("FUZZBIOSIS_TRAP_STATE", (char *)fn, 1);
   setenv("AFL_AUTORESUME", "1", 1);
+  setenv("AFL_FORCE_FASTRESUME", "1", 1);
   setenv("FUZZBIOSIS_DE_ON", "1", 1);
   u8 tmp[32];
   snprintf((char *)tmp, sizeof(tmp), "%u", de_edge_max);
